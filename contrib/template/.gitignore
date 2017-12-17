@@ -1,0 +1,5 @@
+# Shedmake Package Gitignore
+
+# Ignored Cache Folders
+/source
+/binary

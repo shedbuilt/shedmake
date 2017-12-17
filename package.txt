@@ -1,0 +1,3 @@
+NAME=shedmake
+VERSION=0.1
+REVISION=1
