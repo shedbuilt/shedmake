@@ -1,16 +1,17 @@
 #!/bin/bash
 
 # Shedmake Defaults
+INSTALLROOT=/
 SHOULDSTRIP=true
 CFGFILE=/etc/shedmake/shedmake.conf
-export SHED_ISUPGRADE=true
 
 # Shedmake Config
 export SHED_NUMJOBS=$(sed -n 's/^NUMJOBS=//p' ${CFGFILE})
 export SHED_HWCONFIG=$(sed -n 's/^HWCONFIG=//p' ${CFGFILE})
+export SHED_SYSDIR=$(sed -n 's/^SYSDIR=//p' ${CFGFILE})
 
 #Verify existence of directory and package metadata
-export SHED_PKGDIR=$(readlink -f -n $2)
+export SHED_PKGDIR=$(readlink -f -n "$2")
 if [ ! -d ${SHED_PKGDIR} ]; then
     echo "$2 is not a package directory"
     exit 1
@@ -33,7 +34,7 @@ shed_read_package_meta () {
     REVISION=$(sed -n 's/^REVISION=//p' ${PKGMETAFILE})
     SRC=$(sed -n 's/^SRC=//p' ${PKGMETAFILE})
     SRCFILE=$(sed -n 's/^SRCFILE=//p' ${PKGMETAFILE})
-    if [ "${SRCFILE}" == '' ]; then
+    if [ "${SRCFILE}" == '' -a "$SRC" != '' ]; then
         SRCFILE="$(basename ${SRC})"
     fi
     SRCMD5=$(sed -n 's/^SRCMD5=//p' ${PKGMETAFILE})
@@ -62,7 +63,13 @@ shed_verify_source () {
 }
 
 shed_strip_binaries () {
-    find ${SHED_FAKEROOT}/{,usr/}{bin,lib,sbin} -type f -exec strip --strip-unneeded {} \;
+    # Strip all binaries and libraries, except explicitly created .dbg symbol files
+    find "${SHED_FAKEROOT}/usr/lib" -type f -name \*.a \
+        -exec strip --strip-debug {} ';'
+    find "${SHED_FAKEROOT}/lib" "${SHED_FAKEROOT}/usr/lib" -type f \( -name \*.so* -a ! -name \*dbg \) \
+        -exec strip --strip-unneeded {} ';'
+    find ${SHED_FAKEROOT}/{bin,sbin} ${SHED_FAKEROOT}/usr/{bin,sbin,libexec} -type f \
+         -exec strip --strip-all {} ';'
 }
 
 shed_init () {
@@ -73,6 +80,15 @@ shed_init () {
 shed_tag () {
    cd ${SHED_PKGDIR}
    git tag -f ${NAME}-${VERSION}-${REVISION}
+}
+
+shed_run_chroot_script () {
+    chroot "$1" /usr/bin/env -i \
+    HOME=/root                  \
+    TERM="$TERM"                \
+    PS1='\u:\w\$ '              \
+    PATH=/bin:/usr/bin:/sbin:/usr/sbin \
+    /bin/bash "$2"
 }
 
 shed_build () {
@@ -104,7 +120,7 @@ shed_build () {
         fi
 
         # Unarchive Source
-        tar xf ${SRCCACHEDIR}/${SRCFILE} -C ${TMPDIR}
+        tar xf "${SRCCACHEDIR}/${SRCFILE}" -C "${TMPDIR}" || cp "${SRCCACHEDIR}/${SRCFILE}" "$TMPDIR"
     fi
     
     # Determine Source Root Dir
@@ -140,32 +156,55 @@ shed_build () {
     fi
 
     # Archive Build Product
-    tar -cf ${BINCACHEDIR}/${NAME}-${VERSION}-${REVISION}.tar -C $SHED_FAKEROOT .
+    tar -cJf ${BINCACHEDIR}/${NAME}-${VERSION}-${REVISION}.tar.xz -C $SHED_FAKEROOT .
     rm -rf $TMPDIR
 }
 
 shed_install () {
-    echo "Shedmake is preparing to install $NAME $VERSION-$REVISION..."
-    export SHED_BINARCH=${BINCACHEDIR}/${NAME}-${VERSION}-${REVISION}.tar
+    export SHED_INSTALLROOT="$1"
+    echo "Shedmake is preparing to install $NAME $VERSION-$REVISION to ${SHED_INSTALLROOT}..."
+    export SHED_BINARCH=${BINCACHEDIR}/${NAME}-${VERSION}-${REVISION}.tar.xz
+    SHED_CHROOT_PKGDIR=$(echo "$SHED_PKGDIR" | sed 's|'${SHED_INSTALLROOT%/}'/|/|')
+    
     # Pre-Installation
     if [ -a ${SHED_PKGDIR}/preinstall.sh ]; then
-        source ${SHED_PKGDIR}/preinstall.sh
+        if [ $SHED_INSTALLROOT == "/" ]; then
+            source ${SHED_PKGDIR}/preinstall.sh
+        else
+            shed_run_chroot_script "$SHED_INSTALLROOT" "${SHED_CHROOT_PKGDIR}/preinstall.sh"
+        fi
     fi
+
     # Installation
     if [ -a ${SHED_PKGDIR}/install.sh ]; then
-        source ${SHED_PKGDIR}/install.sh
-    else
-        if [ -a $SHED_BINARCH ]; then
-            tar xvf $SHED_BINARCH -C /
+        if [ $SHED_INSTALLROOT == "/" ]; then
+            source ${SHED_PKGDIR}/install.sh
         else
-            echo "Missing binary archive ${NAME}-${VERSION}-${REVISION}.tar"
+            shed_run_chroot_script "$SHED_INSTALLROOT" "${SHED_CHROOT_PKGDIR}/install.sh"
+        fi
+    else
+        if [ ! -r "$SHED_BINARCH" ]; then
+            # Download from the URL specified by BIN
+            # Or, failing that, build it from scratch
+            shed_build || return 1
+        fi
+
+        if [ -r "$SHED_BINARCH" ]; then
+            tar xvf "$SHED_BINARCH" -C "$SHED_INSTALLROOT"
+        else
+            echo "Unable to obtain binary archive ${NAME}-${VERSION}-${REVISION}.tar.xz"
             return 1
         fi
     fi
+
     # Post-Installation
     if [ -a ${SHED_PKGDIR}/postinstall.sh ]; then
         echo "Running post-install script for $NAME $VERSION-$REVISION..."
-        source ${SHED_PKGDIR}/postinstall.sh
+        if [ $SHED_INSTALLROOT == "/" ]; then
+            source ${SHED_PKGDIR}/postinstall.sh
+        else
+            shed_run_chroot_script "$SHED_INSTALLROOT" "${SHED_CHROOT_PKGDIR}/postinstall.sh"
+        fi
     fi
 }
 
@@ -180,7 +219,11 @@ case $1 in
         ;;
     install)
         shed_read_package_meta || exit 1
-        shed_install || exit 1
+        # Check for installation outside of root
+        if [ $# -gt 2 ]; then
+            INSTALLROOT="$3"
+        fi
+        shed_install "$INSTALLROOT" || exit 1
         ;;
     tag)
         shed_read_package_meta || exit 1
