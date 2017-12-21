@@ -190,7 +190,7 @@ shed_install () {
         fi
 
         if [ -r "$SHED_BINARCH" ]; then
-            tar xvf "$SHED_BINARCH" -C "$SHED_INSTALLROOT"
+            tar xvhf "$SHED_BINARCH" -C "$SHED_INSTALLROOT"
         else
             echo "Unable to obtain binary archive ${NAME}-${VERSION}-${REVISION}.tar.xz"
             return 1
