@@ -10,21 +10,25 @@ export SHED_NUMJOBS=$(sed -n 's/^NUMJOBS=//p' ${CFGFILE})
 export SHED_HWCONFIG=$(sed -n 's/^HWCONFIG=//p' ${CFGFILE})
 export SHED_SYSDIR=$(sed -n 's/^SYSDIR=//p' ${CFGFILE})
 
-#Verify existence of directory and package metadata
-export SHED_PKGDIR=$(readlink -f -n "$2")
-if [ ! -d ${SHED_PKGDIR} ]; then
-    echo "$2 is not a package directory"
-    exit 1
-fi
-SRCCACHEDIR=${SHED_PKGDIR}/source
-BINCACHEDIR=${SHED_PKGDIR}/binary
-PKGMETAFILE=${SHED_PKGDIR}/package.txt
-export SHED_PATCHDIR=${SHED_PKGDIR}/patch
-export SHED_CONTRIBDIR=${SHED_PKGDIR}/contrib
-
 shed_read_package_meta () {
+    #Verify existence of directory and package metadata
+    if [ -d "$1" ]; then
+        export SHED_PKGDIR=$(readlink -f -n "$1")
+    elif [ -d "${SHED_SYSDIR}/${1}" ]; then
+        export SHED_PKGDIR="${SHED_SYSDIR}/${1}"
+    else
+        echo "$1 is not a package directory"
+        return 1
+    fi
+
+    SRCCACHEDIR=${SHED_PKGDIR}/source
+    BINCACHEDIR=${SHED_PKGDIR}/binary
+    PKGMETAFILE=${SHED_PKGDIR}/package.txt
+    export SHED_PATCHDIR=${SHED_PKGDIR}/patch
+    export SHED_CONTRIBDIR=${SHED_PKGDIR}/contrib
+
     if [ ! -r ${PKGMETAFILE} ]; then
-        echo "Cannot read from package.txt in package directory $2"
+        echo "Cannot read from package.txt in package directory $SHED_PKGDIR"
         return 1
     fi
 
@@ -73,23 +77,31 @@ shed_strip_binaries () {
          -exec strip --strip-all {} ';'
 }
 
-shed_init () {
-    # Copy template files not present in directory
-    echo "Unimplemented"
-}
-
-shed_tag () {
-   cd ${SHED_PKGDIR}
-   git tag -f ${NAME}-${VERSION}-${REVISION}
-}
-
 shed_run_chroot_script () {
     chroot "$1" /usr/bin/env -i \
     HOME=/root                  \
     TERM="$TERM"                \
     PS1='\u:\w\$ '              \
     PATH=/bin:/usr/bin:/sbin:/usr/sbin \
-    /bin/bash "$2"
+    SHED_HWCONFIG="$SHED_HWCONFIG" \
+    SHED_PKGDIR="$2" \
+    SHED_CONTRIBDIR="${2}/contrib" \
+    SHED_PATCHDIR="${2}/patch" \
+    /bin/bash "${2}/${3}"
+}
+
+shed_get () {
+    cd "$SHED_SYSDIR"
+    local REPOURL="$1"
+    local REPOBRANCH="$2"
+    local REPOFILE="$(basename $REPOURL)"
+    local REPONAME="$(basename $REPOFILE .git)"
+    if [ -d "$REPONAME" ]; then
+        echo "Package repository $REPONAME is already present in $SHED_SYSDIR"
+        return 1
+    fi
+    git submodule add -b "$REPOBRANCH" "$REPOURL" || return 1
+    git submodule init || return 1
 }
 
 shed_build () {
@@ -187,18 +199,18 @@ shed_install () {
     # Pre-Installation
     if [ -a ${SHED_PKGDIR}/preinstall.sh ]; then
         if [ $SHED_INSTALLROOT == "/" ]; then
-            source ${SHED_PKGDIR}/preinstall.sh
+            source ${SHED_PKGDIR}/preinstall.sh || return 1
         else
-            shed_run_chroot_script "$SHED_INSTALLROOT" "${SHED_CHROOT_PKGDIR}/preinstall.sh"
+            shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" preinstall.sh || return 1
         fi
     fi
 
     # Installation
     if [ -a ${SHED_PKGDIR}/install.sh ]; then
         if [ $SHED_INSTALLROOT == "/" ]; then
-            source ${SHED_PKGDIR}/install.sh
+            source ${SHED_PKGDIR}/install.sh || return 1
         else
-            shed_run_chroot_script "$SHED_INSTALLROOT" "${SHED_CHROOT_PKGDIR}/install.sh"
+            shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" install.sh || return 1
         fi
     else
         if [ ! -r "$SHED_BINARCH" ]; then
@@ -208,7 +220,7 @@ shed_install () {
         fi
 
         if [ -r "$SHED_BINARCH" ]; then
-            tar xvhf "$SHED_BINARCH" -C "$SHED_INSTALLROOT"
+            tar xvhf "$SHED_BINARCH" -C "$SHED_INSTALLROOT" || return 1
         else
             echo "Unable to obtain binary archive ${NAME}-${VERSION}-${REVISION}.tar.xz"
             return 1
@@ -219,33 +231,58 @@ shed_install () {
     if [ -a ${SHED_PKGDIR}/postinstall.sh ]; then
         echo "Running post-install script for $NAME $VERSION-$REVISION..."
         if [ $SHED_INSTALLROOT == "/" ]; then
-            source ${SHED_PKGDIR}/postinstall.sh
+            source ${SHED_PKGDIR}/postinstall.sh || return 1
         else
-            shed_run_chroot_script "$SHED_INSTALLROOT" "${SHED_CHROOT_PKGDIR}/postinstall.sh"
+            shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" postinstall.sh || return 1
         fi
     fi
+
+    # Record Installation
+    grep -Fxq "$NAME" "${SHED_SYSDIR}/install.lst"
+    if [ $? -ne 0 ]; then
+        echo "$NAME" >> "${SHED_SYSDIR}/install.lst"
+    fi
+}
+
+shed_update() {
+    cd "$SHED_SYSDIR"
+    git pull --recurse-submodules
+    git submodule update --remote
+}
+
+shed_upgrade() {
+   echo "Unimplemented"
 }
 
 # Command switch
 case $1 in
+    get)
+        TRACK=master
+        if [ $# -lt 2 ]; then
+            echo "Too few arguments to get. Usage: shedmake get <REPO_URL> <REPO_BRANCH>"
+            exit 1
+        elif [ $# -gt 2 ]; then
+            TRACK="$3"
+        fi
+        shed_get "$2" "$TRACK" || exit 1
+        ;;
     build)
-        shed_read_package_meta || exit 1
+        shed_read_package_meta "$2" || exit 1
         shed_build || exit 1
         ;;
-    init)
-        shed_init
-        ;;
     install)
-        shed_read_package_meta || exit 1
+        shed_read_package_meta "$2" || exit 1
         # Check for installation outside of root
         if [ $# -gt 2 ]; then
             INSTALLROOT="$3"
         fi
         shed_install "$INSTALLROOT" || exit 1
         ;;
-    tag)
-        shed_read_package_meta || exit 1
-        shed_tag
+    update)
+        shed_update || exit 1
+        ;;
+    upgrade)
+        shed_upgrade || exit 1
         ;;
     *)
         echo "Unrecognized command: $1"
