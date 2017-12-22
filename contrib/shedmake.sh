@@ -37,6 +37,7 @@ shed_read_package_meta () {
     if [ "${SRCFILE}" == '' -a "$SRC" != '' ]; then
         SRCFILE="$(basename ${SRC})"
     fi
+    REPOREF=$(sed -n 's/^REF=//p' ${PKGMETAFILE})
     SRCMD5=$(sed -n 's/^SRCMD5=//p' ${PKGMETAFILE})
     STRIP=$(sed -n 's/^STRIP=//p' ${PKGMETAFILE})
     if [ "$STRIP" == 'yes' ]; then
@@ -102,25 +103,42 @@ shed_build () {
         if [ ! -d ${SRCCACHEDIR} ]; then
             mkdir ${SRCCACHEDIR}
         fi
-    
-        # Source Acquisition
-        if [ ! -r ${SRCCACHEDIR}/${SRCFILE} ]; then
-            shed_download_source
+
+        if [ ${SRC: -4} == ".git" ]; then
+            # Source is a git repository
+            if [ ! -d "${SRCCACHEDIR}/${REPOREF}" ]; then
+                cd "$SRCCACHEDIR"
+                mkdir "${SRCCACHEDIR}/${REPOREF}"
+                cd "${SRCCACHEDIR}/${REPOREF}"
+                git init
+                git fetch --depth=1 "$SRC" "$REPOREF"
+                git checkout "$REPOREF"
+            fi
+            
+            # Rely on PGP for verification
+
+            # Copy repository files to build directory 
+            cp -R "${SRCCACHEDIR}/${REPOREF}" "$TMPDIR" 
+        else 
+            # Source is an archive
+            if [ ! -r ${SRCCACHEDIR}/${SRCFILE} ]; then
+                shed_download_source
+                if [ $? -ne 0 ]; then
+                    echo "Unable to locate source archive ${SRCFILE}"
+                    exit 1
+                fi
+            fi
+
+            # Verify Source Archive MD5
+            shed_verify_source
             if [ $? -ne 0 ]; then
-                echo "Unable to locate source archive ${SRCFILE}"
+                echo "Source archive ${SRCFILE} does not match expected checksum"
                 exit 1
             fi
-        fi
 
-        # Verify Source Archive MD5
-        shed_verify_source
-        if [ $? -ne 0 ]; then
-            echo "Source archive ${SRCFILE} does not match expected checksum"
-            exit 1
+            # Unarchive Source
+            tar xf "${SRCCACHEDIR}/${SRCFILE}" -C "${TMPDIR}" || cp "${SRCCACHEDIR}/${SRCFILE}" "$TMPDIR"
         fi
-
-        # Unarchive Source
-        tar xf "${SRCCACHEDIR}/${SRCFILE}" -C "${TMPDIR}" || cp "${SRCCACHEDIR}/${SRCFILE}" "$TMPDIR"
     fi
     
     # Determine Source Root Dir
