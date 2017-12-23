@@ -3,3 +3,6 @@
 # Ignored Cache Folders
 /source
 /binary
+
+# Ignored Install Info
+/install.log
