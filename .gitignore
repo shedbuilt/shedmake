@@ -4,5 +4,5 @@
 /source
 /binary
 
-# Ignored Install Info
-/install.log
+# Ignored Install Logs
+/install
