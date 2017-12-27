@@ -238,10 +238,6 @@ shed_build () {
 }
 
 shed_install () {
-    if [[ $EUID -ne 0 ]]; then
-       echo "Installation must be performed as the root user." 
-       return 1
-    fi
     export SHED_INSTALLROOT="$1"
     echo "Shedmake is preparing to install $NAME $VERSION-$REVISION to ${SHED_INSTALLROOT}..."
     export SHED_BINARCH=${BINCACHEDIR}/${NAME}-${VERSION}-${REVISION}.tar.xz
@@ -389,6 +385,11 @@ shed_upgrade_repos () {
         cd ..
     done
 }
+
+if [[ $EUID -ne 0 ]]; then
+    echo "This tool requires root privileges. Please use 'sudo' or run as root."
+    return 1
+fi
 
 # Command switch
 case $1 in
