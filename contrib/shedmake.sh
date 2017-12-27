@@ -11,8 +11,8 @@ CFGFILE=/etc/shedmake/shedmake.conf
 export SHED_NUMJOBS=$(sed -n 's/^NUMJOBS=//p' ${CFGFILE})
 export SHED_HWCONFIG=$(sed -n 's/^HWCONFIG=//p' ${CFGFILE})
 REPODIR=$(sed -n 's/^REPODIR=//p' ${CFGFILE})
-LOCALREPO=$(sed -n 's/^LOCALREPO=//p' ${CFGFILE})
-SYSREPO=$(sed -n 's/^SYSREPO=//p' ${CFGFILE})
+read -ra REMOTEREPOS <<< $(sed -n 's/^REMOTEREPOS=//p' ${CFGFILE})
+read -ra LOCALREPOS <<< $(sed -n 's/^LOCALREPOS=//p' ${CFGFILE})
 export SHED_RELEASE=$(sed -n 's/^RELEASE=//p' ${CFGFILE})
 if [ "$(sed -n 's/^KEEPSRC=//p' ${CFGFILE})" == 'yes' ]; then
     DELETESOURCE=false
@@ -23,22 +23,24 @@ fi
 
 shed_read_package_meta () {
     #Verify existence of directory and package metadata
+    unset SHED_PKGDIR
     if [ -d "$1" ]; then
         export SHED_PKGDIR=$(readlink -f -n "$1")
     else
+        local REPOS=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
+        local REPO
         cd "$REPODIR"
-        for FOLDER in *; do
-            if [ ! -d "$FOLDER" ]; then
+        for REPO in "${REPOS[@]}"; do
+            if [ ! -d "$REPO" ]; then
                 continue
-            elif [ -d "${FOLDER}/${1}" ]; then
-                export SHED_PKGDIR=$(readlink -f -n "${FOLDER}/${1}")
+            elif [ -d "${REPO}/${1}" ]; then
+                export SHED_PKGDIR=$(readlink -f -n "${REPO}/${1}")
                 break
             fi
         done
-        unset SHED_PKGDIR
     fi
 
-    if [ "$SHED_PKGDIR" == "" ]; then
+    if [ "$SHED_PKGDIR" == '' ]; then
         echo "$1 is not a package directory"
         return 1
     fi
@@ -120,19 +122,21 @@ shed_get () {
     local REPOFILE="$(basename $REPOURL)"
     local REPONAME="$(basename $REPOFILE .git)"
     cd "$REPODIR"
-    for FOLDER in *; do
-        if [ ! -d "$FOLDER" ]; then
+    local REPOS=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
+    local REPO
+    for REPO in "${REPOS[@]}"; do
+        if [ ! -d "$REPO" ]; then
             continue
-        elif [ -d "${FOLDER}/${REPONAME}" ]; then
-            echo "Package repository $REPONAME is already present in ${REPODIR}/${FOLDER}"
+        elif [ -d "${REPO}/${REPONAME}" ]; then
+            echo "Package '$REPONAME' is already present in '$REPO' package repository."
             return 1
         fi
     done
-    cd "$LOCALREPO"
+    cd "${LOCALREPOS[0]}"
     git submodule add -b "$REPOBRANCH" "$REPOURL" || return 1
     git submodule init || return 1
 
-    echo "Added $REPONAME to $LOCALREPO package repository."
+    echo "Added '$REPONAME' to '${LOCALREPOS[0]}' package repository."
 }
 
 shed_build () {
@@ -162,6 +166,11 @@ shed_build () {
 
             # Copy repository files to build directory 
             cp -R "${SRCCACHEDIR}/${REPOREF}" "$TMPDIR" 
+
+            # Clean Up
+            if $DELETESOURCE ; then
+                rm -rf "${SRCCACHEDIR}/${REPOREF}"
+            fi
         else 
             # Source is an archive
             if [ ! -r ${SRCCACHEDIR}/${SRCFILE} ]; then
@@ -229,6 +238,10 @@ shed_build () {
 }
 
 shed_install () {
+    if [[ $EUID -ne 0 ]]; then
+       echo "Installation must be performed as the root user." 
+       return 1
+    fi
     export SHED_INSTALLROOT="$1"
     echo "Shedmake is preparing to install $NAME $VERSION-$REVISION to ${SHED_INSTALLROOT}..."
     export SHED_BINARCH=${BINCACHEDIR}/${NAME}-${VERSION}-${REVISION}.tar.xz
@@ -291,42 +304,54 @@ shed_install () {
     echo "Successfully installed $NAME $VERSION-$REVISION"
 }
 
-shed_update () {
-    cd "${REPODIR}/${1}"
-    source update.sh
-}
-
-shed_update_all () {
-    local FOLDER
+shed_update_repos () {
+    local -n REPOS=$1
+    local TYPE="$2"
+    local REPO
     cd "$REPODIR"
-    for FOLDER in *; do
-        if [ ! -d "$FOLDER"]; then
+    for REPO in "${REPOS[@]}"; do
+        if [ ! -d "$REPO" ]; then
             continue
         fi
-        shed_update "$FOLDER"
+        cd "$REPO"
+        echo "Updating $TYPE repository '$REPO'..."
+        if [ $TYPE == 'local' ]; then
+            git submodule update --remote
+            # This cannot be enabled until git is configured for the root user
+            # git commit -a -m "Updating to the latest package revisions"
+        elif [ $TYPE == 'remote' ]; then
+            git pull
+            git submodule update
+        fi
+        cd ..
     done
 }
 
 shed_clean () {
    shed_read_package_meta "$1" || return 1
-   rm -rvf "$SRCCACHEDIR"
-   rm -rvf "$BINCACHEDIR"
+   echo "Cleaning package '$NAME'..."
+   rm -rf "$SRCCACHEDIR"
+   rm -rf "$BINCACHEDIR"
 }
 
-shed_clean_all () {
+shed_clean_repos () {
+    local -n REPOS=$1
     local REPO
     local PACKAGE
     cd "$REPODIR"
-    for REPO in *; do
-        if [ ! -d "$REPO"]; then
+    for REPO in "${REPOS[@]}"; do
+        if [ ! -d "$REPO" ]; then
             continue
         fi
-        for PACKAGE in ${REPO}/*; do
-            if [ ! -d "$PACKAGE"]; then
+        cd "$REPO"
+        echo "Cleaning packages in '$REPO' repository..."
+        for PACKAGE in *; do
+            if [ ! -d "$PACKAGE" ]; then
                 continue
             fi
             shed_clean "${REPODIR}/${REPO}/${PACKAGE}"
         done
+        cd ..
     done
 }
 
@@ -345,20 +370,23 @@ shed_upgrade () {
     shed_install "$INSTALLROOT" || return 1
 }
 
-shed_upgrade_all () {
+shed_upgrade_repos () {
+    local -n REPOS=$1
     local REPO
     local PACKAGE
     cd "$REPODIR"
-    for REPO in *; do
-        if [ ! -d "$REPO"]; then
+    for REPO in "${REPOS[@]}"; do
+        if [ ! -d "$REPO" ]; then
             continue
         fi
-        for PACKAGE in ${REPO}/*; do
-            if [ ! -d "$PACKAGE"]; then
+        cd "$REPO"
+        for PACKAGE in *; do
+            if [ ! -d "$PACKAGE" ]; then
                 continue
             fi
             shed_upgrade "${REPODIR}/${REPO}/${PACKAGE}"
         done
+        cd ..
     done
 }
 
@@ -381,8 +409,13 @@ case $1 in
     clean)
         shed_clean "$2" || exit 1
         ;;
+    clean-repo)
+        REPOSTOCLEAN=("$2")
+        shed_clean_repos REPOSTOCLEAN || exit 1
+        ;;
     clean-all)
-        shed_clean_all || exit 1
+        REPOSTOCLEAN=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
+        shed_clean_repos REPOSTOCLEAN || exit 1
         ;;
     install)
         shed_read_package_meta "$2" || exit 1
@@ -393,19 +426,27 @@ case $1 in
         shed_install "$INSTALLROOT" || exit 1
         ;;
     update-local)
-        shed_update "$LOCALREPO" || exit 1
+        shed_update_repos LOCALREPOS local || exit 1
         ;;
-    update-system)
-        shed_update "$SYSREPO" || exit 1
+    update-remote)
+        shed_update_repos REMOTEREPOS remote || exit 1
         ;;
     update-all)
-        shed_update_all || exit 1
+        shed_update_repos REMOTEREPOS remote || exit 1
+        shed_update_repos LOCALREPOS local || exit 1
         ;;
     upgrade)
         shed_upgrade "$2" || exit 1
         ;;
+    upgrade-local)
+        shed_upgrade_repos LOCALREPOS || exit 1
+        ;;
+    upgrade-remote)
+        shed_upgrade_repos REMOTEREPOS || exit 1
+        ;;
     upgrade-all)
-        shed_upgrade_all || exit 1
+        shed_upgrade_repos REMOTEREPOS || exit 1
+        shed_upgrade_repos LOCALREPOS || exit 1
         ;;
     *)
         echo "Unrecognized command: $1"
