@@ -6,6 +6,7 @@ SHOULDSTRIP=true
 DELETESOURCE=true
 DELETEBINARY=true
 CFGFILE=/etc/shedmake/shedmake.conf
+REQUIREROOT=false
 
 # Shedmake Config
 export SHED_NUMJOBS=$(sed -n 's/^NUMJOBS=//p' ${CFGFILE})
@@ -43,6 +44,11 @@ shed_read_package_meta () {
     if [ "$SHED_PKGDIR" == '' ]; then
         echo "$1 is not a package directory"
         return 1
+    fi
+
+    if [[ $SHED_PKGDIR =~ ^$REPODIR ]]; then
+        # Actions on packages in managed repositories require root privileges
+        REQUIREROOT=true
     fi
 
     SRCCACHEDIR="${SHED_PKGDIR}/source"
@@ -117,6 +123,11 @@ shed_run_chroot_script () {
 }
 
 shed_get () {
+    if [[ $EUID -ne 0 ]]; then
+        echo "Root privileges are required to track a new package repository."
+        return 1
+    fi
+
     local REPOURL="$1"
     local REPOBRANCH="$2"
     local REPOFILE="$(basename $REPOURL)"
@@ -140,6 +151,11 @@ shed_get () {
 }
 
 shed_build () {
+    if $REQUIREROOT && [[ $EUID -ne 0 ]]; then
+        echo "Root privileges are required to build this package."
+        return 1
+    fi
+    
     TMPDIR=/var/tmp/${NAME}-${VERSION}-${REVISION}
     rm -rf "$TMPDIR"
     mkdir "$TMPDIR"
@@ -238,6 +254,11 @@ shed_build () {
 }
 
 shed_install () {
+    if $REQUIREROOT && [[ $EUID -ne 0 ]]; then
+        echo "Root privileges are required to install this package."
+        return 1
+    fi
+
     export SHED_INSTALLROOT="$1"
     echo "Shedmake is preparing to install $NAME $VERSION-$REVISION to ${SHED_INSTALLROOT}..."
     export SHED_BINARCH=${BINCACHEDIR}/${NAME}-${VERSION}-${REVISION}.tar.xz
@@ -325,12 +346,20 @@ shed_update_repos () {
 
 shed_clean () {
    shed_read_package_meta "$1" || return 1
+   if $REQUIREROOT && [[ $EUID -ne 0 ]]; then
+       echo "Root privileges are required to clean this package."
+       return 1
+   fi
    echo "Cleaning package '$NAME'..."
    rm -rf "$SRCCACHEDIR"
    rm -rf "$BINCACHEDIR"
 }
 
 shed_clean_repos () {
+    if [[ $EUID -ne 0 ]]; then
+        echo "Root privileges are required to clean managed repositories."
+        return 1
+    fi
     local -n REPOS=$1
     local REPO
     local PACKAGE
@@ -353,6 +382,10 @@ shed_clean_repos () {
 
 shed_upgrade () {
     shed_read_package_meta "$1" || return 1
+    if $REQUIREROOT && [[ $EUID -ne 0 ]]; then
+            echo "Root privileges are required to upgrade this package."
+            return 1
+    fi
     if [ -e "${SHED_LOGDIR}/installed" ]; then
         grep -Fxq "${VERSION}-${REVISION}" "${SHED_LOGDIR}/installed"
         if [ $? -eq 0 ]; then
@@ -367,6 +400,10 @@ shed_upgrade () {
 }
 
 shed_upgrade_repos () {
+    if [[ $EUID -ne 0 ]]; then
+        echo "Root privileges are required to upgrade managed repositories."
+        return 1
+    fi
     local -n REPOS=$1
     local REPO
     local PACKAGE
@@ -385,11 +422,6 @@ shed_upgrade_repos () {
         cd ..
     done
 }
-
-if [[ $EUID -ne 0 ]]; then
-    echo "This tool requires root privileges. Please use 'sudo' or run as root."
-    return 1
-fi
 
 # Command switch
 case $1 in
