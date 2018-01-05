@@ -22,11 +22,13 @@ if [ "$(sed -n 's/^KEEPBIN=//p' ${CFGFILE})" == 'yes' ]; then
     DELETEBINARY=false
 fi
 
-shed_read_package_meta () {
+shed_locate_package () {
     #Verify existence of directory and package metadata
-    unset SHED_PKGDIR
-    if [ -d "$1" ]; then
-        export SHED_PKGDIR=$(readlink -f -n "$1")
+    local COULDBEPATH="$2"
+    local PKGDIR
+
+    if $COULDBEPATH && [ -d "$1" ]; then
+        PKGDIR=$(readlink -f -n "$1")
     else
         local REPOS=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
         local REPO
@@ -35,22 +37,32 @@ shed_read_package_meta () {
             if [ ! -d "$REPO" ]; then
                 continue
             elif [ -d "${REPO}/${1}" ]; then
-                export SHED_PKGDIR=$(readlink -f -n "${REPO}/${1}")
+                PKGDIR=$(readlink -f -n "${REPO}/${1}")
                 break
             fi
         done
     fi
 
+    if [ "$PKGDIR" == '' ]; then
+        return 1
+    else
+        echo $PKGDIR
+    fi
+}
+
+shed_read_package_meta () {
+    SHED_PKGDIR=$(shed_locate_package "$1" "true")
     if [ "$SHED_PKGDIR" == '' ]; then
         echo "$1 is not a package directory"
         return 1
-    fi
+    fi                    
+    export SHED_PKGDIR
 
     if [[ $SHED_PKGDIR =~ ^$REPODIR ]]; then
         # Actions on packages in managed repositories require root privileges
         REQUIREROOT=true
     fi
-
+    
     SRCCACHEDIR="${SHED_PKGDIR}/source"
     BINCACHEDIR="${SHED_PKGDIR}/binary"
     PKGMETAFILE="${SHED_PKGDIR}/package.txt"
@@ -77,6 +89,22 @@ shed_read_package_meta () {
     SRCMD5=$(sed -n 's/^SRCMD5=//p' ${PKGMETAFILE})
     if [ "$(sed -n 's/^STRIP=//p' ${PKGMETAFILE})" == 'no' ]; then
         SHOULDSTRIP=false
+    fi
+    read -ra BUILDDEPS <<< $(sed -n 's/^BUILDDEPS=//p' ${PKGMETAFILE})
+    read -ra INSTALLDEPS <<< $(sed -n 's/^INSTALLDEPS=//p' ${PKGMETAFILE})
+    read -ra RUNDEPS <<< $(sed -n 's/^RUNDEPS=//p' ${PKGMETAFILE})
+    SHED_PKGINSTALLED=false
+    if [ -e "${SHED_LOGDIR}/installed" ]; then
+        SHED_PKGINSTALLED=true
+    fi
+    export SHED_PKGINSTALLED
+}
+
+shed_read_package_ver () {
+    if [ -e "${1}/install/installed" ]; then
+        tail "${1}/install/installed"
+    else
+        return 1
     fi
 }
 
@@ -151,10 +179,28 @@ shed_get () {
 }
 
 shed_build () {
+    
     if $REQUIREROOT && [[ $EUID -ne 0 ]]; then
         echo "Root privileges are required to build this package."
         return 1
     fi
+
+    # Dependency resolution
+    local DEP
+    for DEP in "${BUILDDEPS[@]}"; do
+        echo "Searching for build dependency '$DEP'..."
+        local DEPPKGLOC
+        DEPPKGLOC=$(shed_locate_package "$DEP" "false")
+        if [ $? -ne 0 ]; then
+            echo "Build dependency '${DEP}' is not present in a managed package repository"
+            return 1
+        fi
+        echo "Checking installed version at ${DEPPKGLOC}..."
+        if ! shed_read_package_ver "$DEPPKGLOC"; then
+            echo "Package for dependency '${DEP}' is present but not installed"
+            return 1
+        fi
+    done
     
     TMPDIR=/var/tmp/${NAME}-${VERSION}-${REVISION}
     rm -rf "$TMPDIR"
@@ -254,6 +300,7 @@ shed_build () {
 }
 
 shed_install () {
+    
     if $REQUIREROOT && [[ $EUID -ne 0 ]]; then
         echo "Root privileges are required to install this package."
         return 1
@@ -321,26 +368,56 @@ shed_install () {
     echo "Successfully installed $NAME $VERSION-$REVISION"
 }
 
+shed_string_in_array () {
+    local -n HAYSTACK=$1
+    local NEEDLE="$2"
+    local ELEMENT
+    for ELEMENT in "${HAYSTACK[@]}"; do
+        if [ "$ELEMENT" == "$NEEDLE" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+shed_update_repo () {
+    if [[ $EUID -ne 0 ]]; then
+        echo "Root privileges are required to update managed repositories."
+        return 1
+    fi
+                    
+    local REPO="$1"
+    local TYPE
+    if shed_string_in_array REMOTEREPOS $REPO; then
+        TYPE='remote'
+    elif shed_string_in_array LOCALREPOS $REPO; then
+        TYPE='local'
+    fi
+    if [ "$TYPE" == '' ]; then
+        echo "Could not find '$REPO' among managed remote and local package repositories."
+        return 1
+    fi
+    cd "$REPODIR"
+    if [ ! -d "$REPO" ]; then
+        echo "Could not find folder for $TYPE managed repository '$REPO'."
+        return 1
+    fi
+    cd "$REPO"
+    echo "Updating $TYPE repository '$REPO'..."
+    if [ $TYPE == 'local' ]; then
+        git submodule update --remote
+        # This cannot be enabled until git is configured for the root user
+        # git commit -a -m "Updating to the latest package revisions"
+    elif [ $TYPE == 'remote' ]; then
+        git pull
+        git submodule update
+    fi
+}
+
 shed_update_repos () {
     local -n REPOS=$1
-    local TYPE="$2"
-    local REPO
-    cd "$REPODIR"
     for REPO in "${REPOS[@]}"; do
-        if [ ! -d "$REPO" ]; then
-            continue
-        fi
-        cd "$REPO"
-        echo "Updating $TYPE repository '$REPO'..."
-        if [ $TYPE == 'local' ]; then
-            git submodule update --remote
-            # This cannot be enabled until git is configured for the root user
-            # git commit -a -m "Updating to the latest package revisions"
-        elif [ $TYPE == 'remote' ]; then
-            git pull
-            git submodule update
-        fi
-        cd ..
+        shed_update_repo "$REPO" || return 1
     done
 }
 
@@ -386,7 +463,7 @@ shed_upgrade () {
             echo "Root privileges are required to upgrade this package."
             return 1
     fi
-    if [ -e "${SHED_LOGDIR}/installed" ]; then
+    if $SHED_PKGINSTALLED; then
         grep -Fxq "${VERSION}-${REVISION}" "${SHED_LOGDIR}/installed"
         if [ $? -eq 0 ]; then
             echo "Package ${NAME} is already up-to-date (${VERSION}-${REVISION})"
@@ -399,27 +476,32 @@ shed_upgrade () {
     shed_install "$INSTALLROOT" || return 1
 }
 
-shed_upgrade_repos () {
+shed_upgrade_repo () {
+    local REPO=$1
     if [[ $EUID -ne 0 ]]; then
-        echo "Root privileges are required to upgrade managed repositories."
+        echo "Root privileges are required to upgrade packages in managed repositories."
         return 1
     fi
-    local -n REPOS=$1
-    local REPO
-    local PACKAGE
     cd "$REPODIR"
-    for REPO in "${REPOS[@]}"; do
-        if [ ! -d "$REPO" ]; then
+    if [ ! -d "$REPO" ]; then
+        echo "Could not find folder for managed repository '$REPO'."
+        return 1
+    fi
+    cd "$REPO"
+    local PACKAGE
+    for PACKAGE in *; do
+        if [ ! -d "$PACKAGE" ]; then
             continue
         fi
-        cd "$REPO"
-        for PACKAGE in *; do
-            if [ ! -d "$PACKAGE" ]; then
-                continue
-            fi
-            shed_upgrade "${REPODIR}/${REPO}/${PACKAGE}"
-        done
-        cd ..
+        shed_upgrade "${REPODIR}/${REPO}/${PACKAGE}" || return 1
+    done
+}
+
+shed_upgrade_repos () {
+    local -n REPOS=$1
+    local REPO
+    for REPO in "${REPOS[@]}"; do
+        shed_upgrade_repo "$REPO" || return 1
     done
 }
 
@@ -436,7 +518,7 @@ case $1 in
         shed_get "$2" "$TRACK" || exit 1
         ;;
     build)
-        shed_read_package_meta "$2" || exit 1
+        shed_read_package_meta "$2" || return 1
         shed_build || exit 1
         ;;
     clean)
@@ -458,28 +540,25 @@ case $1 in
         fi
         shed_install "$INSTALLROOT" || exit 1
         ;;
-    update-local)
-        shed_update_repos LOCALREPOS local || exit 1
-        ;;
-    update-remote)
-        shed_update_repos REMOTEREPOS remote || exit 1
+    update-repo)
+        shed_update_repo "$2" || exit 1
         ;;
     update-all)
-        shed_update_repos REMOTEREPOS remote || exit 1
-        shed_update_repos LOCALREPOS local || exit 1
+        shed_update_repos REMOTEREPOS || exit 1
+        shed_update_repos LOCALREPOS || exit 1
         ;;
     upgrade)
         shed_upgrade "$2" || exit 1
         ;;
-    upgrade-local)
-        shed_upgrade_repos LOCALREPOS || exit 1
-        ;;
-    upgrade-remote)
-        shed_upgrade_repos REMOTEREPOS || exit 1
+    upgrade-repo)
+        shed_upgrade_repo "$2" || exit 1
         ;;
     upgrade-all)
         shed_upgrade_repos REMOTEREPOS || exit 1
         shed_upgrade_repos LOCALREPOS || exit 1
+        ;;
+    version)
+        echo "Shedmake v0.4.2 - A trivial package management tool for Shedbuilt GNU/Linux"
         ;;
     *)
         echo "Unrecognized command: $1"
