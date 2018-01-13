@@ -26,7 +26,7 @@ if [ "$(sed -n 's/^KEEPBIN=//p' ${CFGFILE})" == 'yes' ]; then
     DELETEBINARY=false
 fi
 
-shd_parse_yes_no () {
+shed_parse_yes_no () {
     case "$1" in
         yes) echo 'true';;
         no) echo 'false';;
