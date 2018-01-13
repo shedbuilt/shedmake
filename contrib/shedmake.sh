@@ -1,11 +1,14 @@
 #!/bin/bash
 
 # Shedmake Defaults
-SHEDMAKEVER=0.5.0
+SHEDMAKEVER=0.5.2
 export SHED_INSTALLROOT='/'
 SHOULDSTRIP=true
 DELETESOURCE=true
 DELETEBINARY=true
+SHOULDPREINSTALL=true
+SHOULDINSTALL=true
+SHOULDPOSTINSTALL=true
 CFGFILE=/etc/shedmake/shedmake.conf
 REQUIREROOT=false
 export SHED_VERBOSE=false
@@ -44,6 +47,15 @@ shed_parse_args () {
         case "$OPTION" in
             -v|--verbose)
                 SHED_VERBOSE=true
+                ;;
+            -k|--skip-preinstall)
+                SHOULDPREINSTALL=false
+                ;;
+            -K|--skip-postinstall)
+                SHOULDPOSTINSTALL=false
+                ;;
+            -I|--skip-install)
+                SHOULDINSTALL=false
                 ;;
             *)
                 # Option is binary
@@ -404,47 +416,59 @@ shed_install () {
     fi
     
     # Pre-Installation
-    if [ -a ${SHED_PKGDIR}/preinstall.sh ]; then
-        if [ $SHED_INSTALLROOT == '/' ]; then
-            source ${SHED_PKGDIR}/preinstall.sh || return 1
-        else
-            shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" preinstall.sh || return 1
-        fi
-    fi
-
-    # Installation
-    if [ -a ${SHED_PKGDIR}/install.sh ]; then
-        if [ $SHED_INSTALLROOT == '/' ]; then
-            source ${SHED_PKGDIR}/install.sh || return 1
-        else
-            shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" install.sh || return 1
+    if $SHOULDPREINSTALL; then
+        if [ -a ${SHED_PKGDIR}/preinstall.sh ]; then
+            if [ $SHED_INSTALLROOT == '/' ]; then
+                source ${SHED_PKGDIR}/preinstall.sh || return 1
+            else
+                shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" preinstall.sh || return 1
+            fi
         fi
     else
-        if [ ! -r "$BINARCHIVE" ]; then
-            # TODO: Download from the URL specified by BIN
-            # Or, failing that, build it from scratch
-            shed_build || return 1
-        fi
-
-        if [ -r "$BINARCHIVE" ]; then
-            echo "Installing files from binary archive ${NAME}-${VERSION}-${SHED_RELEASE}-${REVISION}-${SHED_BUILDMODE}.tar.xz..."
-            tar xvhf "$BINARCHIVE" -C "$SHED_INSTALLROOT" > "$SHED_INSTALLLOG" || return 1
+        echo "Skipping the pre-install phase."
+    fi
+    
+    # Installation
+    if $SHOULDINSTALL; then
+        if [ -a ${SHED_PKGDIR}/install.sh ]; then
+            if [ $SHED_INSTALLROOT == '/' ]; then
+                source ${SHED_PKGDIR}/install.sh || return 1
+            else
+                shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" install.sh || return 1
+            fi
         else
-            echo "Unable to obtain binary archive ${NAME}-${VERSION}-${SHED_RELEASE}-${REVISION}-${SHED_BUILDMODE}.tar.xz"
-            return 1
+            if [ ! -r "$BINARCHIVE" ]; then
+                # TODO: Download from the URL specified by BIN
+                # Or, failing that, build it from scratch
+                shed_build || return 1
+            fi
+
+            if [ -r "$BINARCHIVE" ]; then
+                echo "Installing files from binary archive ${NAME}-${VERSION}-${SHED_RELEASE}-${REVISION}-${SHED_BUILDMODE}.tar.xz..."
+                tar xvhf "$BINARCHIVE" -C "$SHED_INSTALLROOT" > "$SHED_INSTALLLOG" || return 1
+            else
+                echo "Unable to obtain binary archive ${NAME}-${VERSION}-${SHED_RELEASE}-${REVISION}-${SHED_BUILDMODE}.tar.xz"
+                return 1
+            fi
         fi
+    else
+        echo "Skipping the install phase."
     fi
 
     # Post-Installation
-    if [ -a ${SHED_PKGDIR}/postinstall.sh ]; then
-        echo "Running post-install script for $NAME $VERSION-$REVISION..."
-        if [ $SHED_INSTALLROOT == '/' ]; then
-            source ${SHED_PKGDIR}/postinstall.sh || return 1
-        else
-            shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" postinstall.sh || return 1
+    if $SHOULDPOSTINSTALL; then
+        if [ -a ${SHED_PKGDIR}/postinstall.sh ]; then
+            echo "Running post-install script for $NAME $VERSION-$REVISION..."
+            if [ $SHED_INSTALLROOT == '/' ]; then
+                source ${SHED_PKGDIR}/postinstall.sh || return 1
+            else
+                shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" postinstall.sh || return 1
+            fi
         fi
+    else
+        echo "Skipping the post-install phase."
     fi
-
+    
     # Record Installation
     echo "${VERSION}-${REVISION}" > "${SHED_LOGDIR}/installed"
 
@@ -657,7 +681,7 @@ case $SHEDCMD in
         shed_upgrade_repos REPOSTOUPGRADE
         ;;
     version)
-        echo "Shedmake v{$SHEDMAKEVER} - A trivial package management tool for Shedbuilt GNU/Linux"
+        echo "Shedmake v${SHEDMAKEVER} - A trivial package management tool for Shedbuilt GNU/Linux"
         ;;
     *)
         echo "Unrecognized command: $1"
