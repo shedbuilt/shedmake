@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Shedmake Defaults
-SHEDMAKEVER=0.5.6
+SHEDMAKEVER=0.5.7
 export SHED_INSTALLROOT='/'
 SHOULDSTRIP=true
 DELETESOURCE=true
@@ -92,7 +92,7 @@ shed_parse_args () {
         esac
         
         case "$OPTION" in
-            -c|--compression
+            -c|--compression)
                 shed_set_binary_archive_compression "$OPTVAL" || return 1
                 ;;
             -i|--install-root)
@@ -265,7 +265,7 @@ shed_run_chroot_script () {
     SHED_TARGET="$SHED_TARGET" \
     SHED_INSTALLROOT='/' \
     SHED_INSTALLLOG="${2}/install/${VERSION}-${REVISION}.log" \
-    /bin/bash "${2}/${3}"
+    bash "${2}/${3}"
 }
 
 shed_add () {
@@ -371,21 +371,11 @@ shed_build () {
             # Source is a git repository
             # Copy repository files to build directory 
             cp -R "${SRCCACHEDIR}/${REPOREF}" "$WORKDIR" 
-
-            # Clean Up
-            if $DELETESOURCE ; then
-                rm -rf "${SRCCACHEDIR}/${REPOREF}"
-            fi
         else 
             # Source is an archive or other file
             # Unarchive Source
             tar xf "${SRCCACHEDIR}/${SRCFILE}" -C "$WORKDIR" || \
                 cp "${SRCCACHEDIR}/${SRCFILE}" "$WORKDIR"
-
-            # Clean Up
-            if $DELETESOURCE ; then
-                rm "${SRCCACHEDIR}/${SRCFILE}"
-            fi
         fi
     fi
     
@@ -406,7 +396,7 @@ shed_build () {
     # Build Source
     mkdir "${SHED_FAKEROOT}"
     if [ -a "${SHED_PKGDIR}/build.sh" ]; then
-        source "${SHED_PKGDIR}/build.sh"
+        bash "${SHED_PKGDIR}/build.sh"
     else
         echo "Missing build script for $NAME $VERSION-$REVISION"
         return 1
@@ -431,6 +421,15 @@ shed_build () {
     tar -caf "${BINCACHEDIR}/$(shed_binary_archive_name)" -C "$SHED_FAKEROOT" .
     rm -rf "$WORKDIR"
 
+    # Clean Up
+    if $DELETESOURCE && [ -n "$SRC" ]; then
+        if [ "${SRC: -4}" == ".git" ]; then
+            rm -rf "${SRCCACHEDIR}/${REPOREF}"
+        else
+            rm "${SRCCACHEDIR}/${SRCFILE}"
+        fi
+    fi
+
     echo "Successfully built $NAME $VERSION-$REVISION"
 }
 
@@ -450,10 +449,10 @@ shed_install () {
     fi
     
     # Pre-Installation
-    if [ -a ${SHED_PKGDIR}/preinstall.sh ]; then
+    if [ -a "${SHED_PKGDIR}/preinstall.sh" ]; then
         if $SHOULDPREINSTALL; then
             if [ $SHED_INSTALLROOT == '/' ]; then
-                source ${SHED_PKGDIR}/preinstall.sh || return 1
+                bash "${SHED_PKGDIR}/preinstall.sh" || return 1
             else
                 shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" preinstall.sh || return 1
             fi
@@ -464,9 +463,9 @@ shed_install () {
     
     # Installation
     if $SHOULDINSTALL; then
-        if [ -a ${SHED_PKGDIR}/install.sh ]; then
-            if [ $SHED_INSTALLROOT == '/' ]; then
-                source ${SHED_PKGDIR}/install.sh || return 1
+        if [ -a "${SHED_PKGDIR}/install.sh" ]; then
+            if [ "$SHED_INSTALLROOT" == '/' ]; then
+                bash "${SHED_PKGDIR}/install.sh" || return 1
             else
                 shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" install.sh || return 1
             fi
@@ -490,11 +489,11 @@ shed_install () {
     fi
 
     # Post-Installation
-    if [ -a ${SHED_PKGDIR}/postinstall.sh ]; then
+    if [ -a "${SHED_PKGDIR}/postinstall.sh" ]; then
         if $SHOULDPOSTINSTALL; then
             echo "Running post-install script for $NAME $VERSION-$REVISION..."
-            if [ $SHED_INSTALLROOT == '/' ]; then
-                source ${SHED_PKGDIR}/postinstall.sh || return 1
+            if [ "$SHED_INSTALLROOT" == '/' ]; then
+                bash "${SHED_PKGDIR}/postinstall.sh" || return 1
             else
                 shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" postinstall.sh || return 1
             fi
@@ -508,7 +507,7 @@ shed_install () {
 
     # Clean Up
     if $DELETEBINARY ; then
-        rm "$SHED_BINARCH"
+        rm "$BINARCHIVE"
     fi
 
     echo "Successfully installed $NAME $VERSION-$REVISION"
