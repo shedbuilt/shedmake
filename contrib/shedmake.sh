@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Shedmake Defaults
-SHEDMAKEVER=0.5.4
+SHEDMAKEVER=0.5.5
 export SHED_INSTALLROOT='/'
 SHOULDSTRIP=true
 DELETESOURCE=true
@@ -273,7 +273,7 @@ shed_add () {
 }
 
 shed_fetch_source () {
-   if [ "$SRC" != '' ]; then
+   if [ -n "$SRC" ]; then
         if [ ! -d "${SRCCACHEDIR}" ]; then
             mkdir "${SRCCACHEDIR}"
         fi
@@ -342,24 +342,26 @@ shed_build () {
 
     # Source acquisition and unpacking
     shed_fetch_source || return 1
-    if [ ${SRC: -4} == ".git" ]; then
-        # Source is a git repository
-        # Copy repository files to build directory 
-        cp -R "${SRCCACHEDIR}/${REPOREF}" "$TMPDIR" 
+    if [ -n "$SRC" ]; then
+        if [ "${SRC: -4}" == ".git" ]; then
+            # Source is a git repository
+            # Copy repository files to build directory 
+            cp -R "${SRCCACHEDIR}/${REPOREF}" "$TMPDIR" 
 
-        # Clean Up
-        if $DELETESOURCE ; then
-            rm -rf "${SRCCACHEDIR}/${REPOREF}"
-        fi
-    else 
-        # Source is an archive or other file
-        # Unarchive Source
-        tar xf "${SRCCACHEDIR}/${SRCFILE}" -C "${TMPDIR}" || \
-            cp "${SRCCACHEDIR}/${SRCFILE}" "$TMPDIR"
+            # Clean Up
+            if $DELETESOURCE ; then
+                rm -rf "${SRCCACHEDIR}/${REPOREF}"
+            fi
+        else 
+            # Source is an archive or other file
+            # Unarchive Source
+            tar xf "${SRCCACHEDIR}/${SRCFILE}" -C "${TMPDIR}" || \
+                cp "${SRCCACHEDIR}/${SRCFILE}" "$TMPDIR"
 
-        # Clean Up
-        if $DELETESOURCE ; then
-            rm "${SRCCACHEDIR}/${SRCFILE}"
+            # Clean Up
+            if $DELETESOURCE ; then
+                rm "${SRCCACHEDIR}/${SRCFILE}"
+            fi
         fi
     fi
     
