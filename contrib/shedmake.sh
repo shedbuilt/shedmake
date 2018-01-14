@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Shedmake Defaults
-SHEDMAKEVER=0.5.5
+SHEDMAKEVER=0.5.6
 export SHED_INSTALLROOT='/'
 SHOULDSTRIP=true
 DELETESOURCE=true
@@ -14,10 +14,27 @@ REQUIREROOT=false
 export SHED_VERBOSE=false
 export SHED_BUILDMODE=release
 
+shed_set_binary_archive_compression () {
+    case "$1" in
+    ''|none)
+        BINARCHEXT="tar"
+        ;;
+    bz2|xz)
+        BINARCHEXT="tar.${1}"
+        ;;
+    *)
+        echo "Invalid compression option: $1"
+        return 1
+        ;;
+    esac
+}
+
 # Shedmake Config
 export SHED_NUMJOBS=$(sed -n 's/^NUMJOBS=//p' ${CFGFILE})
 export SHED_HWCONFIG=$(sed -n 's/^HWCONFIG=//p' ${CFGFILE})
+TMPDIR=$(sed -n 's/^TMPDIR=//p' ${CFGFILE})
 REPODIR=$(sed -n 's/^REPODIR=//p' ${CFGFILE})
+shed_set_binary_archive_compression "$(sed -n 's/^COMPRESSION=//p' ${CFGFILE})"
 read -ra REMOTEREPOS <<< $(sed -n 's/^REMOTEREPOS=//p' ${CFGFILE})
 read -ra LOCALREPOS <<< $(sed -n 's/^LOCALREPOS=//p' ${CFGFILE})
 export SHED_RELEASE=$(sed -n 's/^RELEASE=//p' ${CFGFILE})
@@ -75,6 +92,9 @@ shed_parse_args () {
         esac
         
         case "$OPTION" in
+            -c|--compression
+                shed_set_binary_archive_compression "$OPTVAL" || return 1
+                ;;
             -i|--install-root)
                 SHED_INSTALLROOT="$OPTVAL"
                 ;;
@@ -108,6 +128,10 @@ shed_parse_args () {
                 ;;
         esac    
     done
+}
+
+shed_binary_archive_name () {
+    echo "${NAME}-${VERSION}-${SHED_RELEASE}-${REVISION}-${SHED_BUILDMODE}.${BINARCHEXT}"
 }
 
 shed_locate_package () {
@@ -334,10 +358,10 @@ shed_build () {
         fi
     done
     
-    TMPDIR=/var/tmp/${NAME}-${VERSION}-${REVISION}
-    rm -rf "$TMPDIR"
-    mkdir "$TMPDIR"
-    export SHED_FAKEROOT=${TMPDIR}/fakeroot
+    WORKDIR="${TMPDIR%/}/${NAME}"
+    rm -rf "$WORKDIR"
+    mkdir "$WORKDIR"
+    export SHED_FAKEROOT="${WORKDIR}/fakeroot"
     echo "Shedmake is preparing to build $NAME $VERSION-$REVISION..."
 
     # Source acquisition and unpacking
@@ -346,7 +370,7 @@ shed_build () {
         if [ "${SRC: -4}" == ".git" ]; then
             # Source is a git repository
             # Copy repository files to build directory 
-            cp -R "${SRCCACHEDIR}/${REPOREF}" "$TMPDIR" 
+            cp -R "${SRCCACHEDIR}/${REPOREF}" "$WORKDIR" 
 
             # Clean Up
             if $DELETESOURCE ; then
@@ -355,8 +379,8 @@ shed_build () {
         else 
             # Source is an archive or other file
             # Unarchive Source
-            tar xf "${SRCCACHEDIR}/${SRCFILE}" -C "${TMPDIR}" || \
-                cp "${SRCCACHEDIR}/${SRCFILE}" "$TMPDIR"
+            tar xf "${SRCCACHEDIR}/${SRCFILE}" -C "$WORKDIR" || \
+                cp "${SRCCACHEDIR}/${SRCFILE}" "$WORKDIR"
 
             # Clean Up
             if $DELETESOURCE ; then
@@ -366,17 +390,17 @@ shed_build () {
     fi
     
     # Determine Source Root Dir
-    cd "$TMPDIR"
+    cd "$WORKDIR"
     SRCDIR=$(ls -d */)
     if [ $? -eq 0 ]; then
-        if [ -d "${SRCDIR}" ]; then
-            export SHED_SRCDIR="${TMPDIR}/${SRCDIR}"
-            cd "${SRCDIR}"
+        if [ -d "$SRCDIR" ]; then
+            export SHED_SRCDIR="${WORKDIR}/${SRCDIR}"
+            cd "$SRCDIR"
         else
-            export SHED_SRCDIR="${TMPDIR}"
+            export SHED_SRCDIR="$WORKDIR"
         fi
     else
-        export SHED_SRCDIR="${TMPDIR}"
+        export SHED_SRCDIR="$WORKDIR"
     fi
 
     # Build Source
@@ -390,7 +414,7 @@ shed_build () {
 
     if [ $? -ne 0 ]; then
         echo "Failed to build $NAME $VERSION-$REVISION"
-        rm -rf $TMPDIR
+        rm -rf "$WORKDIR"
         return 1
     fi
 
@@ -404,8 +428,8 @@ shed_build () {
     fi
 
     # Archive Build Product
-    tar -cJf "${BINCACHEDIR}/${NAME}-${VERSION}-${SHED_RELEASE}-${REVISION}-${SHED_BUILDMODE}.tar.xz" -C "$SHED_FAKEROOT" .
-    rm -rf $TMPDIR
+    tar -caf "${BINCACHEDIR}/$(shed_binary_archive_name)" -C "$SHED_FAKEROOT" .
+    rm -rf "$WORKDIR"
 
     echo "Successfully built $NAME $VERSION-$REVISION"
 }
@@ -418,7 +442,7 @@ shed_install () {
     fi
 
     echo "Shedmake is preparing to install $NAME $VERSION-$REVISION to ${SHED_INSTALLROOT}..."
-    BINARCHIVE=${BINCACHEDIR}/${NAME}-${VERSION}-${SHED_RELEASE}-${REVISION}-${SHED_BUILDMODE}.tar.xz
+    BINARCHIVE="${BINCACHEDIR}/$(shed_binary_archive_name)"
     SHED_CHROOT_PKGDIR=$(echo "$SHED_PKGDIR" | sed 's|'${SHED_INSTALLROOT%/}'/|/|')
 
     if [ ! -d "${SHED_LOGDIR}" ]; then
