@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Shedmake Defaults
-SHEDMAKEVER=0.5.2
+SHEDMAKEVER=0.5.3
 export SHED_INSTALLROOT='/'
 SHOULDSTRIP=true
 DELETESOURCE=true
@@ -13,7 +13,6 @@ CFGFILE=/etc/shedmake/shedmake.conf
 REQUIREROOT=false
 export SHED_VERBOSE=false
 export SHED_BUILDMODE=release
-export SHED_TARGET="$(gcc -dumpmachine)"
 
 # Shedmake Config
 export SHED_NUMJOBS=$(sed -n 's/^NUMJOBS=//p' ${CFGFILE})
@@ -22,6 +21,8 @@ REPODIR=$(sed -n 's/^REPODIR=//p' ${CFGFILE})
 read -ra REMOTEREPOS <<< $(sed -n 's/^REMOTEREPOS=//p' ${CFGFILE})
 read -ra LOCALREPOS <<< $(sed -n 's/^LOCALREPOS=//p' ${CFGFILE})
 export SHED_RELEASE=$(sed -n 's/^RELEASE=//p' ${CFGFILE})
+export SHED_TARGET=$(sed -n 's/^TARGET=//p' ${CFGFILE})
+export SHED_TOOLCHAIN_TARGET=$(sed -n 's/^TOOLCHAIN_TARGET=//p' ${CFGFILE})
 if [ "$(sed -n 's/^KEEPSRC=//p' ${CFGFILE})" == 'yes' ]; then
     DELETESOURCE=false
 fi
@@ -45,17 +46,25 @@ shed_parse_args () {
         shift
         # Check for unary options
         case "$OPTION" in
+            -t|--toolchain-target)
+                SHED_TARGET="$SHED_TOOLCHAIN_TARGET"
+                return 0
+                ;;
             -v|--verbose)
                 SHED_VERBOSE=true
+                return 0
                 ;;
             -k|--skip-preinstall)
                 SHOULDPREINSTALL=false
+                return 0
                 ;;
             -K|--skip-postinstall)
                 SHOULDPOSTINSTALL=false
+                return 0
                 ;;
             -I|--skip-install)
                 SHOULDINSTALL=false
+                return 0
                 ;;
             *)
                 # Option is binary
@@ -70,11 +79,8 @@ shed_parse_args () {
         esac
         
         case "$OPTION" in
-            -i|--installroot)
+            -i|--install-root)
                 SHED_INSTALLROOT="$OPTVAL"
-                ;;
-            -t|--target)
-                SHED_TARGET="$OPTVAL"
                 ;;
             -j|--jobs)
                 SHED_NUMJOBS="$OPTVAL"
@@ -416,16 +422,16 @@ shed_install () {
     fi
     
     # Pre-Installation
-    if $SHOULDPREINSTALL; then
-        if [ -a ${SHED_PKGDIR}/preinstall.sh ]; then
+    if [ -a ${SHED_PKGDIR}/preinstall.sh ]; then
+        if $SHOULDPREINSTALL; then
             if [ $SHED_INSTALLROOT == '/' ]; then
                 source ${SHED_PKGDIR}/preinstall.sh || return 1
             else
                 shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" preinstall.sh || return 1
             fi
+        else
+            echo "Skipping the pre-install phase."
         fi
-    else
-        echo "Skipping the pre-install phase."
     fi
     
     # Installation
@@ -456,17 +462,17 @@ shed_install () {
     fi
 
     # Post-Installation
-    if $SHOULDPOSTINSTALL; then
-        if [ -a ${SHED_PKGDIR}/postinstall.sh ]; then
+    if [ -a ${SHED_PKGDIR}/postinstall.sh ]; then
+        if $SHOULDPOSTINSTALL; then
             echo "Running post-install script for $NAME $VERSION-$REVISION..."
             if [ $SHED_INSTALLROOT == '/' ]; then
                 source ${SHED_PKGDIR}/postinstall.sh || return 1
             else
                 shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" postinstall.sh || return 1
             fi
+        else
+            echo "Skipping the post-install phase."
         fi
-    else
-        echo "Skipping the post-install phase."
     fi
     
     # Record Installation
