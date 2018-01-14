@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Shedmake Defaults
-SHEDMAKEVER=0.5.3
+SHEDMAKEVER=0.5.4
 export SHED_INSTALLROOT='/'
 SHOULDSTRIP=true
 DELETESOURCE=true
@@ -46,25 +46,21 @@ shed_parse_args () {
         shift
         # Check for unary options
         case "$OPTION" in
-            -t|--toolchain-target)
-                SHED_TARGET="$SHED_TOOLCHAIN_TARGET"
-                return 0
-                ;;
             -v|--verbose)
                 SHED_VERBOSE=true
-                return 0
+                continue
                 ;;
             -k|--skip-preinstall)
                 SHOULDPREINSTALL=false
-                return 0
+                continue
                 ;;
             -K|--skip-postinstall)
                 SHOULDPOSTINSTALL=false
-                return 0
+                continue
                 ;;
             -I|--skip-install)
                 SHOULDINSTALL=false
-                return 0
+                continue
                 ;;
             *)
                 # Option is binary
@@ -99,6 +95,12 @@ shed_parse_args () {
                     echo "Invalid argument for '$OPTION' Please specify 'yes' or 'no'"
                     return 1
                 fi
+                ;;
+            -t|--target)
+                SHED_TARGET="$OPTVAL"
+                ;;
+            -T|--toolchain-target)
+                SHED_TOOLCHAIN_TARGET="$OPTVAL"
                 ;;
             *)
                 echo "Unknown option: '$OPTION'"
