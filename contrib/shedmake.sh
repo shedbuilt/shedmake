@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Shedmake Defaults
-SHEDMAKEVER=0.6.1
+SHEDMAKEVER=0.6.2
 CFGFILE=/etc/shedmake/shedmake.conf
 SHOULDSTRIP=true
 KEEPSOURCE=false
@@ -365,7 +365,7 @@ shed_build () {
     
     WORKDIR="${TMPDIR%/}/${NAME}"
     rm -rf "$WORKDIR"
-    mkdir "$WORKDIR"
+    mkdir -p "$WORKDIR"
     export SHED_FAKEROOT="${WORKDIR}/fakeroot"
     echo "Shedmake is preparing to build $NAME $VERSION-$REVISION..."
 
@@ -736,12 +736,13 @@ if [ $# -gt 0 ] && [ "${1: -5}" = '-list' ]; then
         echo "Unable to read from list file: '$2'"
         exit 1
     fi
-    LISTCMD=$1; shift
-    LISTFILE=$2; shift
-    while read -r PKGARGS
+    LISTCMD="$1"; shift
+    SMLFILE=$(readlink -f -n "$1"); shift
+    while read -ra SMLARGS
     do
-        shed_command "$LISTCMD $PKGARGS $@" || exit 1
-    done < $LISTFILE
+        PKGARGS=( "$LISTCMD" "${SMLARGS[@]}" "$@" )
+        shed_command "${PKGARGS[@]}" || exit 1
+    done < "$SMLFILE"
 else
     shed_command "$@" || exit 1
 fi
