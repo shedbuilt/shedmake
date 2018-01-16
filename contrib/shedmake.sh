@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Shedmake Defaults
-SHEDMAKEVER=0.6.2
+SHEDMAKEVER=0.6.3
 CFGFILE=/etc/shedmake/shedmake.conf
 SHOULDSTRIP=true
 KEEPSOURCE=false
@@ -736,12 +736,17 @@ if [ $# -gt 0 ] && [ "${1: -5}" = '-list' ]; then
         echo "Unable to read from list file: '$2'"
         exit 1
     fi
+    LISTWD="$(pwd)"
     LISTCMD="$1"; shift
     SMLFILE=$(readlink -f -n "$1"); shift
     while read -ra SMLARGS
     do
+        if [[ "$SMLARGS" =~ ^#.* ]]; then
+            continue
+        fi
         PKGARGS=( "$LISTCMD" "${SMLARGS[@]}" "$@" )
         shed_command "${PKGARGS[@]}" || exit 1
+        cd "$LISTWD"
     done < "$SMLFILE"
 else
     shed_command "$@" || exit 1
