@@ -1,18 +1,28 @@
 #!/bin/bash
 
 # Shedmake Defaults
-SHEDMAKEVER=0.5.7
-export SHED_INSTALLROOT='/'
+SHEDMAKEVER=0.6.0
+CFGFILE=/etc/shedmake/shedmake.conf
 SHOULDSTRIP=true
-DELETESOURCE=true
-DELETEBINARY=true
+KEEPSOURCE=false
+KEEPBINARY=false
 SHOULDPREINSTALL=true
 SHOULDINSTALL=true
 SHOULDPOSTINSTALL=true
-CFGFILE=/etc/shedmake/shedmake.conf
 REQUIREROOT=false
 export SHED_VERBOSE=false
 export SHED_BUILDMODE=release
+export SHED_TARGET=native
+export SHED_HOST=native
+export SHED_INSTALLROOT='/'
+
+shed_parse_yes_no () {
+    case "$1" in
+        yes) echo 'true';;
+        no) echo 'false';;
+        *) return 1;;
+    esac
+}
 
 shed_set_binary_archive_compression () {
     case "$1" in
@@ -30,30 +40,22 @@ shed_set_binary_archive_compression () {
 }
 
 # Shedmake Config
-export SHED_NUMJOBS=$(sed -n 's/^NUMJOBS=//p' ${CFGFILE})
-export SHED_HWCONFIG=$(sed -n 's/^HWCONFIG=//p' ${CFGFILE})
-TMPDIR=$(sed -n 's/^TMPDIR=//p' ${CFGFILE})
-REPODIR=$(sed -n 's/^REPODIR=//p' ${CFGFILE})
-shed_set_binary_archive_compression "$(sed -n 's/^COMPRESSION=//p' ${CFGFILE})"
-read -ra REMOTEREPOS <<< $(sed -n 's/^REMOTEREPOS=//p' ${CFGFILE})
-read -ra LOCALREPOS <<< $(sed -n 's/^LOCALREPOS=//p' ${CFGFILE})
-export SHED_RELEASE=$(sed -n 's/^RELEASE=//p' ${CFGFILE})
-export SHED_TARGET=$(sed -n 's/^TARGET=//p' ${CFGFILE})
-export SHED_TOOLCHAIN_TARGET=$(sed -n 's/^TOOLCHAIN_TARGET=//p' ${CFGFILE})
-if [ "$(sed -n 's/^KEEPSRC=//p' ${CFGFILE})" == 'yes' ]; then
-    DELETESOURCE=false
+if [ ! -r "$CFGFILE" ]; then
+    echo "Unable to read from config file: '$CFGFILE'"
+    exit 1
 fi
-if [ "$(sed -n 's/^KEEPBIN=//p' ${CFGFILE})" == 'yes' ]; then
-    DELETEBINARY=false
-fi
-
-shed_parse_yes_no () {
-    case "$1" in
-        yes) echo 'true';;
-        no) echo 'false';;
-        *) return 1;;
-    esac
-}
+export SHED_NUMJOBS=$(sed -n 's/^NUMJOBS=//p' $CFGFILE)
+export SHED_HWCONFIG=$(sed -n 's/^HWCONFIG=//p' $CFGFILE)
+TMPDIR=$(sed -n 's/^TMPDIR=//p' $CFGFILE)
+REPODIR=$(sed -n 's/^REPODIR=//p' $CFGFILE)
+shed_set_binary_archive_compression "$(sed -n 's/^COMPRESSION=//p' $CFGFILE)"
+read -ra REMOTEREPOS <<< $(sed -n 's/^REMOTEREPOS=//p' $CFGFILE)
+read -ra LOCALREPOS <<< $(sed -n 's/^LOCALREPOS=//p' $CFGFILE)
+export SHED_RELEASE=$(sed -n 's/^RELEASE=//p' $CFGFILE)
+export SHED_NATIVE_TARGET=$(sed -n 's/^NATIVE_TARGET=//p' $CFGFILE)
+export SHED_TOOLCHAIN_TARGET=$(sed -n 's/^TOOLCHAIN_TARGET=//p' $CFGFILE)
+KEEPSOURCE=$(shed_parse_yes_no "$(sed -n 's/^KEEPSRC=//p' $CFGFILE)")
+KEEPBINARY=$(shed_parse_yes_no "$(sed -n 's/^KEEPBIN=//p' $CFGFILE)")
 
 shed_parse_args () {
     local OPTION
@@ -95,6 +97,9 @@ shed_parse_args () {
             -c|--compression)
                 shed_set_binary_archive_compression "$OPTVAL" || return 1
                 ;;
+            -h|--host)
+                SHED_HOST="$OPTVAL"
+                ;;
             -i|--install-root)
                 SHED_INSTALLROOT="$OPTVAL"
                 ;;
@@ -104,7 +109,7 @@ shed_parse_args () {
             -m|--mode)
                 SHED_BUILDMODE="$OPTVAL"
                 ;;
-            -h|--hwconfig)
+            -d|--hardware-config)
                 SHED_HWCONFIG="$OPTVAL"
                 ;;
             -s|--strip)
@@ -118,9 +123,6 @@ shed_parse_args () {
                 ;;
             -t|--target)
                 SHED_TARGET="$OPTVAL"
-                ;;
-            -T|--toolchain-target)
-                SHED_TOOLCHAIN_TARGET="$OPTVAL"
                 ;;
             *)
                 echo "Unknown option: '$OPTION'"
@@ -155,7 +157,7 @@ shed_locate_package () {
         done
     fi
 
-    if [ "$PKGDIR" == '' ]; then
+    if [ -z "$PKGDIR" ]; then
         return 1
     else
         echo $PKGDIR
@@ -169,7 +171,7 @@ shed_read_package_meta () {
         return 1
     fi                    
     
-    if [[ $SHED_PKGDIR =~ ^$REPODIR ]]; then
+    if [[ $SHED_PKGDIR =~ ^$REPODIR.* ]]; then
         # Actions on packages in managed repositories require root privileges
         REQUIREROOT=true
     fi
@@ -193,12 +195,12 @@ shed_read_package_meta () {
     export SHED_INSTALLLOG="${SHED_LOGDIR}/${VERSION}-${REVISION}.log"
     SRC=$(sed -n 's/^SRC=//p' ${PKGMETAFILE})
     SRCFILE=$(sed -n 's/^SRCFILE=//p' ${PKGMETAFILE})
-    if [ "${SRCFILE}" == '' -a "$SRC" != '' ]; then
+    if [ -z "$SRCFILE" ] && [ -n "$SRC" ]; then
         SRCFILE="$(basename ${SRC})"
     fi
     REPOREF=$(sed -n 's/^REF=//p' ${PKGMETAFILE})
     SRCMD5=$(sed -n 's/^SRCMD5=//p' ${PKGMETAFILE})
-    if [ "$(sed -n 's/^STRIP=//p' ${PKGMETAFILE})" == 'no' ]; then
+    if [ "$(sed -n 's/^STRIP=//p' ${PKGMETAFILE})" = 'no' ]; then
         SHOULDSTRIP=false
     fi
     read -ra BUILDDEPS <<< $(sed -n 's/^BUILDDEPS=//p' ${PKGMETAFILE})
@@ -262,7 +264,10 @@ shed_run_chroot_script () {
     SHED_LOGDIR="${2}/install" \
     SHED_RELEASE="$SHED_RELEASE" \
     SHED_BUILDMODE="$SHED_BUILDMODE" \
+    SHED_HOST="$SHED_HOST" \
     SHED_TARGET="$SHED_TARGET" \
+    SHED_NATIVE_TARGET="$SHED_NATIVE_TARGET" \
+    SHED_TOOLCHAIN_TARGET="$SHED_TOOLCHAIN_TARGET" \
     SHED_INSTALLROOT='/' \
     SHED_INSTALLLOG="${2}/install/${VERSION}-${REVISION}.log" \
     bash "${2}/${3}"
@@ -302,7 +307,7 @@ shed_fetch_source () {
             mkdir "${SRCCACHEDIR}"
         fi
 
-        if [ ${SRC: -4} == ".git" ]; then
+        if [ "${SRC: -4}" = '.git' ]; then
             # Source is a git repository
             if [ ! -d "${SRCCACHEDIR}/${REPOREF}" ]; then
                 cd "$SRCCACHEDIR"
@@ -367,7 +372,7 @@ shed_build () {
     # Source acquisition and unpacking
     shed_fetch_source || return 1
     if [ -n "$SRC" ]; then
-        if [ "${SRC: -4}" == ".git" ]; then
+        if [ "${SRC: -4}" = '.git' ]; then
             # Source is a git repository
             # Copy repository files to build directory 
             cp -R "${SRCCACHEDIR}/${REPOREF}" "$WORKDIR" 
@@ -422,8 +427,8 @@ shed_build () {
     rm -rf "$WORKDIR"
 
     # Clean Up
-    if $DELETESOURCE && [ -n "$SRC" ]; then
-        if [ "${SRC: -4}" == ".git" ]; then
+    if ! $KEEPSOURCE && [ -n "$SRC" ]; then
+        if [ "${SRC: -4}" = '.git' ]; then
             rm -rf "${SRCCACHEDIR}/${REPOREF}"
         else
             rm "${SRCCACHEDIR}/${SRCFILE}"
@@ -451,7 +456,7 @@ shed_install () {
     # Pre-Installation
     if [ -a "${SHED_PKGDIR}/preinstall.sh" ]; then
         if $SHOULDPREINSTALL; then
-            if [ $SHED_INSTALLROOT == '/' ]; then
+            if [ "$SHED_INSTALLROOT" = '/' ]; then
                 bash "${SHED_PKGDIR}/preinstall.sh" || return 1
             else
                 shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" preinstall.sh || return 1
@@ -464,7 +469,7 @@ shed_install () {
     # Installation
     if $SHOULDINSTALL; then
         if [ -a "${SHED_PKGDIR}/install.sh" ]; then
-            if [ "$SHED_INSTALLROOT" == '/' ]; then
+            if [ "$SHED_INSTALLROOT" = '/' ]; then
                 bash "${SHED_PKGDIR}/install.sh" || return 1
             else
                 shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" install.sh || return 1
@@ -492,7 +497,7 @@ shed_install () {
     if [ -a "${SHED_PKGDIR}/postinstall.sh" ]; then
         if $SHOULDPOSTINSTALL; then
             echo "Running post-install script for $NAME $VERSION-$REVISION..."
-            if [ "$SHED_INSTALLROOT" == '/' ]; then
+            if [ "$SHED_INSTALLROOT" = '/' ]; then
                 bash "${SHED_PKGDIR}/postinstall.sh" || return 1
             else
                 shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" postinstall.sh || return 1
@@ -506,7 +511,7 @@ shed_install () {
     echo "${VERSION}-${REVISION}" > "${SHED_LOGDIR}/installed"
 
     # Clean Up
-    if $DELETEBINARY ; then
+    if ! $KEEPBINARY; then
         rm "$BINARCHIVE"
     fi
 
@@ -518,7 +523,7 @@ shed_string_in_array () {
     local NEEDLE="$2"
     local ELEMENT
     for ELEMENT in "${HAYSTACK[@]}"; do
-        if [ "$ELEMENT" == "$NEEDLE" ]; then
+        if [ "$ELEMENT" = "$NEEDLE" ]; then
             return 0
         fi
     done
@@ -538,7 +543,7 @@ shed_update_repo () {
     elif shed_string_in_array LOCALREPOS $REPO; then
         TYPE='local'
     fi
-    if [ "$TYPE" == '' ]; then
+    if [ -z "$TYPE" ]; then
         echo "Could not find '$REPO' among managed remote and local package repositories."
         return 1
     fi
@@ -549,11 +554,11 @@ shed_update_repo () {
     fi
     cd "$REPO"
     echo "Updating $TYPE repository '$REPO'..."
-    if [ $TYPE == 'local' ]; then
+    if [ "$TYPE" = 'local' ]; then
         git submodule update --remote
         # This cannot be enabled until git is configured for the root user
         # git commit -a -m "Updating to the latest package revisions"
-    elif [ $TYPE == 'remote' ]; then
+    elif [ "$TYPE" = 'remote' ]; then
         git pull
         git submodule update
     fi
@@ -650,73 +655,98 @@ shed_upgrade_repos () {
     done
 }
 
-# Command switch
-if [ $# -gt 0 ]; then
-    SHEDCMD=$1
-    shift
-else
-    SHEDCMD=version
-fi
+shed_command () {
+    # Command switch
+    if [ $# -gt 0 ]; then
+        SHEDCMD=$1
+        shift
+    else
+        SHEDCMD=version
+    fi
 
-case $SHEDCMD in
-    add)
-        TRACK="$SHED_RELEASE"
-        if [ $# -lt 1 ]; then
-            echo "Too few arguments to 'add'. Usage: shedmake add <REPO_URL> <REPO_BRANCH>"
+    case "${SHEDCMD%-list}" in
+        add)
+            TRACK="$SHED_RELEASE"
+            if [ $# -lt 1 ]; then
+                echo "Too few arguments to 'add'. Usage: shedmake add <REPO_URL> <REPO_BRANCH>"
+                exit 1
+            elif [ $# -gt 1 ]; then
+                TRACK="$2"
+            fi
+            shed_add "$1" "$TRACK" || exit 1
+            ;;
+        build)
+            shed_read_package_meta "$1" && \
+            shift && \
+            shed_parse_args "$@" && \
+            shed_build
+            ;;
+        clean)
+            shed_clean "$1"
+            ;;
+        clean-repo)
+            REPOSTOCLEAN=("$1")
+            shed_clean_repos REPOSTOCLEAN
+            ;;
+        clean-all)
+            REPOSTOCLEAN=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
+            shed_clean_repos REPOSTOCLEAN
+            ;;
+        fetch-source)
+            shed_read_package_meta "$1" && \
+            shed_fetch_source
+            ;;
+        install)
+            shed_read_package_meta "$1" && \
+            shift && \
+            shed_parse_args "$@" && \
+            shed_install
+            ;;
+        update-repo)
+            shed_update_repo "$1"
+            ;;
+        update-all)
+            REPOSTOUPDATE=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
+            shed_update_repos REPOSTOUPDATE
+            ;;
+        upgrade)
+            shed_upgrade "$1"
+            ;;
+        upgrade-repo)
+            shed_upgrade_repo "$1"
+            ;;
+        upgrade-all)
+            REPOSTOUPGRADE=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
+            shed_upgrade_repos REPOSTOUPGRADE
+            ;;
+        version)
+            echo "Shedmake v${SHEDMAKEVER} - A trivial package management tool for Shedbuilt GNU/Linux"
+            ;;
+        *)
+            echo "Unrecognized command: $SHEDCMD"
+            ;;
+    esac
+}
+
+# Check for -list prefix
+if [ $# -gt 0 ] && [ "${1: -5}" = '-list' ]; then
+    case "${1%-list}" in
+        version|upgrade-all|update-all|clean-all)
+            echo "Unrecognized command: $SHEDCMD"
             exit 1
-        elif [ $# -gt 1 ]; then
-            TRACK="$2"
-        fi
-        shed_add "$1" "$TRACK" || exit 1
         ;;
-    build)
-        shed_read_package_meta "$1" && \
-        shift && \
-        shed_parse_args "$@" && \
-        shed_build
-        ;;
-    clean)
-        shed_clean "$1"
-        ;;
-    clean-repo)
-        REPOSTOCLEAN=("$1")
-        shed_clean_repos REPOSTOCLEAN
-        ;;
-    clean-all)
-        REPOSTOCLEAN=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
-        shed_clean_repos REPOSTOCLEAN
-        ;;
-    fetch-source)
-        shed_read_package_meta "$1" && \
-        shed_fetch_source
-        ;;
-    install)
-        shed_read_package_meta "$1" && \
-        shift && \
-        shed_parse_args "$@" && \
-        shed_install
-        ;;
-    update-repo)
-        shed_update_repo "$1"
-        ;;
-    update-all)
-        REPOSTOUPDATE=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
-        shed_update_repos REPOSTOUPDATE
-        ;;
-    upgrade)
-        shed_upgrade "$1"
-        ;;
-    upgrade-repo)
-        shed_upgrade_repo "$1"
-        ;;
-    upgrade-all)
-        REPOSTOUPGRADE=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
-        shed_upgrade_repos REPOSTOUPGRADE
-        ;;
-    version)
-        echo "Shedmake v${SHEDMAKEVER} - A trivial package management tool for Shedbuilt GNU/Linux"
-        ;;
-    *)
-        echo "Unrecognized command: $1"
-        ;;
-esac
+    esac
+    if [ $# -lt 2 ]; then
+        echo "Too few arguments to '$1'. Expected: shedmake $1 <listfile>"
+        exit 1
+    elif [ ! -r "$2" ]; then
+        echo "Unable to read from list file: '$2'"
+        exit 1
+    fi
+    while read -r PKGARGS
+    do
+        shed_command "$1 $PKGARGS" || exit 1
+    done < "$2"
+else
+    shed_command "$@" || exit 1
+fi
