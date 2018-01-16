@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Shedmake Defaults
-SHEDMAKEVER=0.6.0
+SHEDMAKEVER=0.6.1
 CFGFILE=/etc/shedmake/shedmake.conf
 SHOULDSTRIP=true
 KEEPSOURCE=false
@@ -658,14 +658,13 @@ shed_upgrade_repos () {
 shed_command () {
     # Command switch
     if [ $# -gt 0 ]; then
-        SHEDCMD=$1
-        shift
+        SHEDCMD=$1; shift
     else
         SHEDCMD=version
     fi
 
-    case "${SHEDCMD%-list}" in
-        add)
+    case "$SHEDCMD" in
+        add|add-list)
             TRACK="$SHED_RELEASE"
             if [ $# -lt 1 ]; then
                 echo "Too few arguments to 'add'. Usage: shedmake add <REPO_URL> <REPO_BRANCH>"
@@ -675,16 +674,16 @@ shed_command () {
             fi
             shed_add "$1" "$TRACK" || exit 1
             ;;
-        build)
+        build|build-list)
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" && \
             shed_build
             ;;
-        clean)
+        clean|clean-list)
             shed_clean "$1"
             ;;
-        clean-repo)
+        clean-repo|clean-repo-list)
             REPOSTOCLEAN=("$1")
             shed_clean_repos REPOSTOCLEAN
             ;;
@@ -692,27 +691,27 @@ shed_command () {
             REPOSTOCLEAN=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
             shed_clean_repos REPOSTOCLEAN
             ;;
-        fetch-source)
+        fetch-source|fetch-source-list)
             shed_read_package_meta "$1" && \
             shed_fetch_source
             ;;
-        install)
+        install|install-list)
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" && \
             shed_install
             ;;
-        update-repo)
+        update-repo|update-repo-list)
             shed_update_repo "$1"
             ;;
         update-all)
             REPOSTOUPDATE=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
             shed_update_repos REPOSTOUPDATE
             ;;
-        upgrade)
+        upgrade|upgrade-list)
             shed_upgrade "$1"
             ;;
-        upgrade-repo)
+        upgrade-repo|upgrade-repo-list)
             shed_upgrade_repo "$1"
             ;;
         upgrade-all)
@@ -723,30 +722,26 @@ shed_command () {
             echo "Shedmake v${SHEDMAKEVER} - A trivial package management tool for Shedbuilt GNU/Linux"
             ;;
         *)
-            echo "Unrecognized command: $SHEDCMD"
+            echo "Unrecognized command: '$SHEDCMD'"
             ;;
     esac
 }
 
-# Check for -list prefix
+# Check for -list action prefix
 if [ $# -gt 0 ] && [ "${1: -5}" = '-list' ]; then
-    case "${1%-list}" in
-        version|upgrade-all|update-all|clean-all)
-            echo "Unrecognized command: $SHEDCMD"
-            exit 1
-        ;;
-    esac
     if [ $# -lt 2 ]; then
-        echo "Too few arguments to '$1'. Expected: shedmake $1 <listfile>"
+        echo "Too few arguments to list-based action. Expected: shedmake <action> <listfile> <option 1> ..."
         exit 1
     elif [ ! -r "$2" ]; then
         echo "Unable to read from list file: '$2'"
         exit 1
     fi
+    LISTCMD=$1; shift
+    LISTFILE=$2; shift
     while read -r PKGARGS
     do
-        shed_command "$1 $PKGARGS" || exit 1
-    done < "$2"
+        shed_command "$LISTCMD $PKGARGS $@" || exit 1
+    done < $LISTFILE
 else
     shed_command "$@" || exit 1
 fi
