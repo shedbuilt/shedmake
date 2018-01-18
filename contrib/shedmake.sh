@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Shedmake Defines
-SHEDMAKEVER=0.6.4
+SHEDMAKEVER=0.6.5
 CFGFILE=/etc/shedmake/shedmake.conf
 
 shed_parse_yes_no () {
@@ -430,9 +430,10 @@ shed_build () {
 
     # Archive Build Product
     tar -caf "${BINCACHEDIR}/$(shed_binary_archive_name)" -C "$SHED_FAKEROOT" .
-    rm -rf "$WORKDIR"
 
     # Clean Up
+    cd "$TMPDIR"
+    rm -rf "$WORKDIR"
     if ! $KEEPSOURCE && [ -n "$SRC" ]; then
         if [ "${SRC: -4}" = '.git' ]; then
             rm -rf "${SRCCACHEDIR}/${REPOREF}"
