@@ -1,20 +1,8 @@
 #!/bin/bash
 
-# Shedmake Defaults
-SHEDMAKEVER=0.6.3
+# Shedmake Defines
+SHEDMAKEVER=0.6.4
 CFGFILE=/etc/shedmake/shedmake.conf
-SHOULDSTRIP=true
-KEEPSOURCE=false
-KEEPBINARY=false
-SHOULDPREINSTALL=true
-SHOULDINSTALL=true
-SHOULDPOSTINSTALL=true
-REQUIREROOT=false
-export SHED_VERBOSE=false
-export SHED_BUILDMODE=release
-export SHED_TARGET=native
-export SHED_HOST=native
-export SHED_INSTALLROOT='/'
 
 shed_parse_yes_no () {
     case "$1" in
@@ -39,23 +27,41 @@ shed_set_binary_archive_compression () {
     esac
 }
 
-# Shedmake Config
+# Shedmake Config File Defaults
 if [ ! -r "$CFGFILE" ]; then
     echo "Unable to read from config file: '$CFGFILE'"
     exit 1
 fi
-export SHED_NUMJOBS=$(sed -n 's/^NUMJOBS=//p' $CFGFILE)
-export SHED_HWCONFIG=$(sed -n 's/^HWCONFIG=//p' $CFGFILE)
-TMPDIR=$(sed -n 's/^TMPDIR=//p' $CFGFILE)
-REPODIR=$(sed -n 's/^REPODIR=//p' $CFGFILE)
-shed_set_binary_archive_compression "$(sed -n 's/^COMPRESSION=//p' $CFGFILE)"
-read -ra REMOTEREPOS <<< $(sed -n 's/^REMOTEREPOS=//p' $CFGFILE)
-read -ra LOCALREPOS <<< $(sed -n 's/^LOCALREPOS=//p' $CFGFILE)
-export SHED_RELEASE=$(sed -n 's/^RELEASE=//p' $CFGFILE)
-export SHED_NATIVE_TARGET=$(sed -n 's/^NATIVE_TARGET=//p' $CFGFILE)
-export SHED_TOOLCHAIN_TARGET=$(sed -n 's/^TOOLCHAIN_TARGET=//p' $CFGFILE)
-KEEPSOURCE=$(shed_parse_yes_no "$(sed -n 's/^KEEPSRC=//p' $CFGFILE)")
-KEEPBINARY=$(shed_parse_yes_no "$(sed -n 's/^KEEPBIN=//p' $CFGFILE)")
+DEFAULT_NUMJOBS="$(sed -n 's/^NUMJOBS=//p' $CFGFILE)"
+DEFAULT_HWCONFIG="$(sed -n 's/^HWCONFIG=//p' $CFGFILE)"
+TMPDIR="$(sed -n 's/^TMPDIR=//p' $CFGFILE)"
+REPODIR="$(sed -n 's/^REPODIR=//p' $CFGFILE)"
+DEFAULT_COMPRESSION="$(sed -n 's/^COMPRESSION=//p' $CFGFILE)"
+read -ra REMOTEREPOS <<< "$(sed -n 's/^REMOTEREPOS=//p' $CFGFILE)"
+read -ra LOCALREPOS <<< "$(sed -n 's/^LOCALREPOS=//p' $CFGFILE)"
+export SHED_RELEASE="$(sed -n 's/^RELEASE=//p' $CFGFILE)"
+export SHED_NATIVE_TARGET="$(sed -n 's/^NATIVE_TARGET=//p' $CFGFILE)"
+export SHED_TOOLCHAIN_TARGET="$(sed -n 's/^TOOLCHAIN_TARGET=//p' $CFGFILE)"
+DEFAULT_KEEPSOURCE=$(shed_parse_yes_no "$(sed -n 's/^KEEPSRC=//p' $CFGFILE)")
+DEFAULT_KEEPBINARY=$(shed_parse_yes_no "$(sed -n 's/^KEEPBIN=//p' $CFGFILE)")
+                                                                            
+shed_load_defaults () {
+    SHOULDSTRIP=true
+    KEEPSOURCE="$DEFAULT_KEEPSOURCE"
+    KEEPBINARY="$DEFAULT_KEEPBINARY"
+    SHOULDPREINSTALL=true
+    SHOULDINSTALL=true
+    SHOULDPOSTINSTALL=true
+    REQUIREROOT=false
+    export SHED_VERBOSE=false
+    export SHED_BUILDMODE=release
+    export SHED_TARGET=native
+    export SHED_HOST=native
+    export SHED_INSTALLROOT='/'
+    export SHED_NUMJOBS="$DEFAULT_NUMJOBS"
+    export SHED_HWCONFIG="$DEFAULT_HWCONFIG"
+    shed_set_binary_archive_compression "$DEFAULT_COMPRESSION"
+}
 
 shed_parse_args () {
     local OPTION
@@ -547,12 +553,11 @@ shed_update_repo () {
         echo "Could not find '$REPO' among managed remote and local package repositories."
         return 1
     fi
-    cd "$REPODIR"
-    if [ ! -d "$REPO" ]; then
+    if [ ! -d "${REPODIR}/${REPO}" ]; then
         echo "Could not find folder for $TYPE managed repository '$REPO'."
         return 1
     fi
-    cd "$REPO"
+    cd "${REPODIR}/${REPO}"
     echo "Updating $TYPE repository '$REPO'..."
     if [ "$TYPE" = 'local' ]; then
         git submodule update --remote
@@ -590,25 +595,22 @@ shed_clean_repos () {
     local -n REPOS=$1
     local REPO
     local PACKAGE
-    cd "$REPODIR"
     for REPO in "${REPOS[@]}"; do
-        if [ ! -d "$REPO" ]; then
+        if [ ! -d "${REPODIR}/${REPO}" ]; then
             continue
         fi
-        cd "$REPO"
         echo "Cleaning packages in '$REPO' repository..."
-        for PACKAGE in *; do
-            if [ ! -d "$PACKAGE" ]; then
+        for PACKAGE in "${REPODIR}/${REPO}"/*; do
+            if [ ! -d "${REPODIR}/${REPO}/${PACKAGE}" ]; then
                 continue
             fi
-            shed_clean "${REPODIR}/${REPO}/${PACKAGE}"
+            shed_read_package_meta "${REPODIR}/${REPO}/${PACKAGE}" && \
+            shed_clean || return 1
         done
-        cd ..
     done
 }
 
 shed_upgrade () {
-    shed_read_package_meta "$1" || return 1
     if $REQUIREROOT && [[ $EUID -ne 0 ]]; then
             echo "Root privileges are required to upgrade this package."
             return 1
@@ -623,7 +625,7 @@ shed_upgrade () {
         echo "Package ${NAME} is not installed"
         return 1
     fi
-    shed_install "$INSTALLROOT" || return 1
+    shed_install
 }
 
 shed_upgrade_repo () {
@@ -632,18 +634,17 @@ shed_upgrade_repo () {
         echo "Root privileges are required to upgrade packages in managed repositories."
         return 1
     fi
-    cd "$REPODIR"
-    if [ ! -d "$REPO" ]; then
+    if [ ! -d "${REPODIR}/${REPO}" ]; then
         echo "Could not find folder for managed repository '$REPO'."
         return 1
     fi
-    cd "$REPO"
     local PACKAGE
-    for PACKAGE in *; do
+    for PACKAGE in "${REPODIR}/${REPO}"/*; do
         if [ ! -d "$PACKAGE" ]; then
             continue
         fi
-        shed_upgrade "${REPODIR}/${REPO}/${PACKAGE}" || return 1
+        shed_read_package_meta "${REPODIR}/${REPO}/${PACKAGE}" && \
+        shed_upgrade || return 1
     done
 }
 
@@ -656,7 +657,9 @@ shed_upgrade_repos () {
 }
 
 shed_command () {
-    # Command switch
+    local SHEDCMD
+    local REPOS
+    local REPO
     if [ $# -gt 0 ]; then
         SHEDCMD=$1; shift
     else
@@ -665,58 +668,74 @@ shed_command () {
 
     case "$SHEDCMD" in
         add|add-list)
-            TRACK="$SHED_RELEASE"
+            local TRACK="$SHED_RELEASE"
             if [ $# -lt 1 ]; then
                 echo "Too few arguments to 'add'. Usage: shedmake add <REPO_URL> <REPO_BRANCH>"
                 exit 1
             elif [ $# -gt 1 ]; then
                 TRACK="$2"
             fi
-            shed_add "$1" "$TRACK" || exit 1
+            shed_load_defaults && \
+            shed_add "$1" "$TRACK"
             ;;
         build|build-list)
+            shed_load_defaults && \
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" && \
             shed_build
             ;;
         clean|clean-list)
+            shed_load_defaults && \
             shed_clean "$1"
             ;;
         clean-repo|clean-repo-list)
-            REPOSTOCLEAN=("$1")
-            shed_clean_repos REPOSTOCLEAN
+            REPOS=( "$1" )
+            shed_load_defaults && \
+            shed_clean_repos REPOS
             ;;
         clean-all)
-            REPOSTOCLEAN=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
-            shed_clean_repos REPOSTOCLEAN
+            REPOS=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
+            shed_load_defaults && \
+            shed_clean_repos REPOS
             ;;
         fetch-source|fetch-source-list)
+            shed_load_defaults && \
             shed_read_package_meta "$1" && \
             shed_fetch_source
             ;;
         install|install-list)
+            shed_load_defaults && \
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" && \
             shed_install
             ;;
         update-repo|update-repo-list)
+            shed_load_defaults && \
             shed_update_repo "$1"
             ;;
         update-all)
-            REPOSTOUPDATE=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
-            shed_update_repos REPOSTOUPDATE
+            REPOS=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
+            shed_load_defaults && \
+            shed_update_repos REPOS
             ;;
         upgrade|upgrade-list)
-            shed_upgrade "$1"
+            shed_load_defaults && \
+            shed_read_package_meta "$1" && \
+            shift && \
+            shed_parse_args "$@" && \
+            shed_upgrade
             ;;
         upgrade-repo|upgrade-repo-list)
+            shed_load_defaults && \
             shed_upgrade_repo "$1"
             ;;
         upgrade-all)
-            REPOSTOUPGRADE=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
-            shed_upgrade_repos REPOSTOUPGRADE
+            REPOS=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
+            shed_load_defaults && \
+            shed_parse_args "$@" && \
+            shed_upgrade_repos REPOS
             ;;
         version)
             echo "Shedmake v${SHEDMAKEVER} - A trivial package management tool for Shedbuilt GNU/Linux"
