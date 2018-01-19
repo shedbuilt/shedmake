@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.6.6
+SHEDMAKEVER=0.6.7
 CFGFILE=/etc/shedmake/shedmake.conf
 
 shed_parse_yes_no () {
@@ -641,7 +641,7 @@ shed_upgrade () {
     shed_install
 }
 
-shed_upgrade_repo () {
+shed_upgrade_repos () {
     local -n REPOS=$1
     local REPO
     if [[ $EUID -ne 0 ]]; then
