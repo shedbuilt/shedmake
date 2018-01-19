@@ -1,7 +1,25 @@
 #!/bin/bash
 
+# Shedmake: A trivial package manager for Shedbuilt GNU/Linux
+# Copyright 2018 Auston Stewart
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and 
+# associated documentation files (the "Software"), to deal in the Software without restriction, including 
+# without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
+# copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to 
+# the following conditions:
+
+# The above copyright notice and this permission notice shall be included in all copies or substantial 
+# portions of the Software.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT 
+# LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN 
+# NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, 
+# WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE 
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 # Shedmake Defines
-SHEDMAKEVER=0.6.5
+SHEDMAKEVER=0.6.6
 CFGFILE=/etc/shedmake/shedmake.conf
 
 shed_parse_yes_no () {
@@ -537,48 +555,42 @@ shed_string_in_array () {
     return 1
 }
 
-shed_update_repo () {
+shed_update_repos () {
+    local -n REPOS=$1
+    local REPO
+    local TYPE
     if [[ $EUID -ne 0 ]]; then
         echo "Root privileges are required to update managed repositories."
         return 1
-    fi
-                    
-    local REPO="$1"
-    local TYPE
-    if shed_string_in_array REMOTEREPOS $REPO; then
-        TYPE='remote'
-    elif shed_string_in_array LOCALREPOS $REPO; then
-        TYPE='local'
-    fi
-    if [ -z "$TYPE" ]; then
-        echo "Could not find '$REPO' among managed remote and local package repositories."
-        return 1
-    fi
-    if [ ! -d "${REPODIR}/${REPO}" ]; then
-        echo "Could not find folder for $TYPE managed repository '$REPO'."
-        return 1
-    fi
-    cd "${REPODIR}/${REPO}"
-    echo "Updating $TYPE repository '$REPO'..."
-    if [ "$TYPE" = 'local' ]; then
-        git submodule update --remote
-        # This cannot be enabled until git is configured for the root user
-        # git commit -a -m "Updating to the latest package revisions"
-    elif [ "$TYPE" = 'remote' ]; then
-        git pull
-        git submodule update
-    fi
-}
-
-shed_update_repos () {
-    local -n REPOS=$1
+    fi               
     for REPO in "${REPOS[@]}"; do
-        shed_update_repo "$REPO" || return 1
+        if shed_string_in_array REMOTEREPOS $REPO; then
+            TYPE='remote'
+        elif shed_string_in_array LOCALREPOS $REPO; then
+            TYPE='local'
+        fi
+        if [ -z "$TYPE" ]; then
+            echo "Could not find '$REPO' among managed remote and local package repositories."
+            return 1
+        fi
+        if [ ! -d "${REPODIR}/${REPO}" ]; then
+            echo "Could not find folder for $TYPE managed repository '$REPO'."
+            return 1
+        fi
+        cd "${REPODIR}/${REPO}"
+        echo "Updating $TYPE repository '$REPO'..."
+        if [ "$TYPE" = 'local' ]; then
+            git submodule update --remote
+            # This cannot be enabled until git is configured for the root user
+            # git commit -a -m "Updating to the latest package revisions"
+        elif [ "$TYPE" = 'remote' ]; then
+            git pull
+            git submodule update
+        fi
     done
 }
 
 shed_clean () {
-   shed_read_package_meta "$1" || return 1
    if $REQUIREROOT && [[ $EUID -ne 0 ]]; then
        echo "Root privileges are required to clean this package."
        return 1
@@ -602,10 +614,10 @@ shed_clean_repos () {
         fi
         echo "Cleaning packages in '$REPO' repository..."
         for PACKAGE in "${REPODIR}/${REPO}"/*; do
-            if [ ! -d "${REPODIR}/${REPO}/${PACKAGE}" ]; then
+            if [ ! -d "$PACKAGE" ]; then
                 continue
             fi
-            shed_read_package_meta "${REPODIR}/${REPO}/${PACKAGE}" && \
+            shed_read_package_meta "$PACKAGE" && \
             shed_clean || return 1
         done
     done
@@ -623,44 +635,38 @@ shed_upgrade () {
             return 0
         fi
     else
-        echo "Package ${NAME} is not installed"
+        echo "Package $NAME is not installed"
         return 1
     fi
     shed_install
 }
 
 shed_upgrade_repo () {
-    local REPO=$1
+    local -n REPOS=$1
+    local REPO
     if [[ $EUID -ne 0 ]]; then
         echo "Root privileges are required to upgrade packages in managed repositories."
         return 1
     fi
-    if [ ! -d "${REPODIR}/${REPO}" ]; then
-        echo "Could not find folder for managed repository '$REPO'."
-        return 1
-    fi
-    local PACKAGE
-    for PACKAGE in "${REPODIR}/${REPO}"/*; do
-        if [ ! -d "$PACKAGE" ]; then
-            continue
-        fi
-        shed_read_package_meta "${REPODIR}/${REPO}/${PACKAGE}" && \
-        shed_upgrade || return 1
-    done
-}
-
-shed_upgrade_repos () {
-    local -n REPOS=$1
-    local REPO
     for REPO in "${REPOS[@]}"; do
-        shed_upgrade_repo "$REPO" || return 1
+        if [ ! -d "${REPODIR}/${REPO}" ]; then
+            echo "Could not find folder for managed repository '$REPO'."
+            return 1
+        fi
+        local PACKAGE
+        for PACKAGE in "${REPODIR}/${REPO}"/*; do
+            if [ ! -d "$PACKAGE" ]; then
+                continue
+            fi
+            shed_read_package_meta "$PACKAGE" && \
+            shed_upgrade || return 1
+        done
     done
 }
 
 shed_command () {
     local SHEDCMD
-    local REPOS
-    local REPO
+    local CMDREPOS
     if [ $# -gt 0 ]; then
         SHEDCMD=$1; shift
     else
@@ -688,17 +694,18 @@ shed_command () {
             ;;
         clean|clean-list)
             shed_load_defaults && \
-            shed_clean "$1"
+            shed_read_package_meta "$1" && \
+            shed_clean
             ;;
         clean-repo|clean-repo-list)
-            REPOS=( "$1" )
+            CMDREPOS=( "$1" )
             shed_load_defaults && \
-            shed_clean_repos REPOS
+            shed_clean_repos CMDREPOS
             ;;
         clean-all)
-            REPOS=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
+            CMDREPOS=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
             shed_load_defaults && \
-            shed_clean_repos REPOS
+            shed_clean_repos CMDREPOS
             ;;
         fetch-source|fetch-source-list)
             shed_load_defaults && \
@@ -713,13 +720,14 @@ shed_command () {
             shed_install
             ;;
         update-repo|update-repo-list)
+            CMDREPOS=( "$1" )
             shed_load_defaults && \
-            shed_update_repo "$1"
+            shed_update_repos CMDREPOS
             ;;
         update-all)
-            REPOS=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
+            CMDREPOS=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
             shed_load_defaults && \
-            shed_update_repos REPOS
+            shed_update_repos CMDREPOS
             ;;
         upgrade|upgrade-list)
             shed_load_defaults && \
@@ -729,14 +737,15 @@ shed_command () {
             shed_upgrade
             ;;
         upgrade-repo|upgrade-repo-list)
+            CMDREPOS=( "$1" )
             shed_load_defaults && \
-            shed_upgrade_repo "$1"
+            shed_upgrade_repos CMDREPOS
             ;;
         upgrade-all)
-            REPOS=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
+            CMDREPOS=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
             shed_load_defaults && \
             shed_parse_args "$@" && \
-            shed_upgrade_repos REPOS
+            shed_upgrade_repos CMDREPOS
             ;;
         version)
             echo "Shedmake v${SHEDMAKEVER} - A trivial package management tool for Shedbuilt GNU/Linux"
