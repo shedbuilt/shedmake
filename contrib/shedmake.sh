@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.6.7
+SHEDMAKEVER=0.6.6
 CFGFILE=/etc/shedmake/shedmake.conf
 
 shed_parse_yes_no () {
@@ -333,15 +333,19 @@ shed_fetch_source () {
 
         if [ "${SRC: -4}" = '.git' ]; then
             # Source is a git repository
-            if [ ! -d "${SRCCACHEDIR}/${REPOREF}" ]; then
+            if [ ! -d "${SRCCACHEDIR}/${NAME}-git" ]; then
                 cd "$SRCCACHEDIR"
-                mkdir "${SRCCACHEDIR}/${REPOREF}"
-                cd "${SRCCACHEDIR}/${REPOREF}"
+                mkdir "${SRCCACHEDIR}/${NAME}-git"
+                cd "${SRCCACHEDIR}/${NAME}-git"
                 git init
-                git fetch --depth=1 "$SRC" "$REPOREF" || return 1
-                git checkout "$REPOREF" || return 1
+                git remote add origin "$SRC"
+            else
+                cd "${SRCCACHEDIR}/${NAME}-git"
             fi
-            
+            # Perform a shallow fetch of the desired refspec
+            local LOCALREPOREF="$(sed -e "s/^refs\/heads\//refs\/remotes\/origin\//g" <<< $REPOREF)"
+            git fetch --depth=1 origin +${REPOREF}:${LOCALREPOREF} && \
+            git checkout --quiet FETCH_HEAD || return 1
             # TODO: Use signature for verification
         else 
             # Source is an archive
@@ -399,7 +403,7 @@ shed_build () {
         if [ "${SRC: -4}" = '.git' ]; then
             # Source is a git repository
             # Copy repository files to build directory 
-            cp -R "${SRCCACHEDIR}/${REPOREF}" "$WORKDIR" 
+            cp -R "${SRCCACHEDIR}/${NAME}-git" "$WORKDIR" 
         else 
             # Source is an archive or other file
             # Unarchive Source
@@ -454,7 +458,7 @@ shed_build () {
     rm -rf "$WORKDIR"
     if ! $KEEPSOURCE && [ -n "$SRC" ]; then
         if [ "${SRC: -4}" = '.git' ]; then
-            rm -rf "${SRCCACHEDIR}/${REPOREF}"
+            rm -rf "${SRCCACHEDIR}/${NAME}-git"
         else
             rm "${SRCCACHEDIR}/${SRCFILE}"
         fi
