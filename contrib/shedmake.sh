@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.6.6
+SHEDMAKEVER=0.6.8
 CFGFILE=/etc/shedmake/shedmake.conf
 
 shed_parse_yes_no () {
