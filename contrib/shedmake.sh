@@ -19,8 +19,8 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.6.8
-CFGFILE=/etc/shedmake/shedmake.conf
+SHEDMAKEVER=0.6.9
+CFGFILE=/etc/shedmake.conf
 
 shed_parse_yes_no () {
     case "$1" in
@@ -51,13 +51,15 @@ if [ ! -r "$CFGFILE" ]; then
     exit 1
 fi
 DEFAULT_NUMJOBS="$(sed -n 's/^NUMJOBS=//p' $CFGFILE)"
-DEFAULT_HWCONFIG="$(sed -n 's/^HWCONFIG=//p' $CFGFILE)"
+DEFAULT_DEVICE="$(sed -n 's/^DEVICE=//p' $CFGFILE)"
 TMPDIR="$(sed -n 's/^TMPDIR=//p' $CFGFILE)"
 REPODIR="$(sed -n 's/^REPODIR=//p' $CFGFILE)"
 DEFAULT_COMPRESSION="$(sed -n 's/^COMPRESSION=//p' $CFGFILE)"
-read -ra REMOTEREPOS <<< "$(sed -n 's/^REMOTEREPOS=//p' $CFGFILE)"
-read -ra LOCALREPOS <<< "$(sed -n 's/^LOCALREPOS=//p' $CFGFILE)"
+read -ra REMOTEREPOS <<< "$(sed -n 's/^REMOTE_REPOS=//p' $CFGFILE)"
+read -ra LOCALREPOS <<< "$(sed -n 's/^LOCAL_REPOS=//p' $CFGFILE)"
 export SHED_RELEASE="$(sed -n 's/^RELEASE=//p' $CFGFILE)"
+export SHED_CPU_CORE="$(sed -n 's/^CPU_CORE=//p' $CFGFILE)"
+export SHED_CPU_FEATURES="$(sed -n 's/^CPU_FEATURES=//p' $CFGFILE)"
 export SHED_NATIVE_TARGET="$(sed -n 's/^NATIVE_TARGET=//p' $CFGFILE)"
 export SHED_TOOLCHAIN_TARGET="$(sed -n 's/^TOOLCHAIN_TARGET=//p' $CFGFILE)"
 DEFAULT_KEEPSOURCE=$(shed_parse_yes_no "$(sed -n 's/^KEEPSRC=//p' $CFGFILE)")
@@ -77,7 +79,8 @@ shed_load_defaults () {
     export SHED_HOST=native
     export SHED_INSTALLROOT='/'
     export SHED_NUMJOBS="$DEFAULT_NUMJOBS"
-    export SHED_HWCONFIG="$DEFAULT_HWCONFIG"
+    export SHED_HWCONFIG="$DEFAULT_DEVICE"
+    export SHED_DEVICE="$DEFAULT_DEVICE"
     shed_set_binary_archive_compression "$DEFAULT_COMPRESSION"
 }
 
@@ -133,8 +136,9 @@ shed_parse_args () {
             -m|--mode)
                 SHED_BUILDMODE="$OPTVAL"
                 ;;
-            -d|--hardware-config)
+            -d|--device)
                 SHED_HWCONFIG="$OPTVAL"
+                SHED_DEVICE="$OPTVAL"
                 ;;
             -s|--strip)
                 OPTVAL=$(shed_parse_yes_no "$OPTVAL")
@@ -157,7 +161,11 @@ shed_parse_args () {
 }
 
 shed_binary_archive_name () {
-    echo "${NAME}-${VERSION}-${SHED_RELEASE}-${REVISION}-${SHED_BUILDMODE}.${BINARCHEXT}"
+    if [ -n "$BINFILE" ]; then
+        eval echo "$BINFILE"
+    else
+        echo "${NAME}_${VERSION}_${REVISION}_${SHED_RELEASE}_${SHED_BUILDMODE}_${SHED_CPU_CORE}_${SHED_CPU_FEATURES}.${BINARCHEXT}"
+    fi
 }
 
 shed_locate_package () {
@@ -220,12 +228,17 @@ shed_read_package_meta () {
     SRC=$(sed -n 's/^SRC=//p' ${PKGMETAFILE})
     SRCFILE=$(sed -n 's/^SRCFILE=//p' ${PKGMETAFILE})
     if [ -z "$SRCFILE" ] && [ -n "$SRC" ]; then
-        SRCFILE="$(basename ${SRC})"
+        SRCFILE=$(basename $SRC)
     fi
     REPOREF=$(sed -n 's/^REF=//p' ${PKGMETAFILE})
     SRCMD5=$(sed -n 's/^SRCMD5=//p' ${PKGMETAFILE})
     if [ "$(sed -n 's/^STRIP=//p' ${PKGMETAFILE})" = 'no' ]; then
         SHOULDSTRIP=false
+    fi
+    BIN=$(sed -n 's/^BIN=//p' ${PKGMETAFILE})
+    BINFILE=$(sed -n 's/^BINFILE=//p' ${PKGMETAFILE})
+    if [ -z "$BINFILE" ] && [ -n "$BIN" ]; then
+        BINFILE=$(basename $BIN)
     fi
     read -ra BUILDDEPS <<< $(sed -n 's/^BUILDDEPS=//p' ${PKGMETAFILE})
     read -ra INSTALLDEPS <<< $(sed -n 's/^INSTALLDEPS=//p' ${PKGMETAFILE})
@@ -250,19 +263,30 @@ shed_read_package_ver () {
 }
 
 shed_download_source () {
-    cd ${SRCCACHEDIR}
-    wget -O ${SRCFILE} ${SRC}
-    if [ ! -r ${SRCCACHEDIR}/${SRCFILE} ]; then
-        return 1
+    if [ ! -d "$SRCCACHEDIR" ]; then
+        mkdir "$SRCCACHEDIR"
     fi
-    return 0                                                            
+    cd "$SRCCACHEDIR"
+    wget -O "$SRCFILE" "$SRC"
+}
+
+shed_download_binary () {
+    if [ ! -d "$BINCACHEDIR" ]; then
+        mkdir "$BINCACHEDIR"
+    fi
+    cd "$BINCACHEDIR"
+    local BINURL=$(eval echo "$BIN")
+    wget -O "$(shed_binary_archive_name)" "$BINURL"
 }
 
 shed_verify_source () {
-    if [ "$(md5sum ${SRCCACHEDIR}/${SRCFILE} | awk '{print $1}')" != "$SRCMD5" ]; then
-        return 1
+    if [ -n "$SRCMD5" ]; then
+        if [ "$(md5sum ${SRCCACHEDIR}/${SRCFILE} | awk '{print $1}')" != "$SRCMD5" ]; then
+            return 1
+        fi
+    else
+        echo 'WARNING: Skipping verification of source archive because SRCMD5 is absent from package metadata'
     fi
-    return 0
 }
 
 shed_strip_binaries () {
@@ -282,6 +306,7 @@ shed_run_chroot_script () {
     PS1='\u:\w\$ '              \
     PATH=/bin:/usr/bin:/sbin:/usr/sbin \
     SHED_HWCONFIG="$SHED_HWCONFIG" \
+    SHED_DEVICE="$SHED_DEVICE" \
     SHED_PKGDIR="$2" \
     SHED_CONTRIBDIR="${2}/contrib" \
     SHED_PATCHDIR="${2}/patch" \
@@ -327,15 +352,10 @@ shed_add () {
 
 shed_fetch_source () {
    if [ -n "$SRC" ]; then
-        if [ ! -d "${SRCCACHEDIR}" ]; then
-            mkdir "${SRCCACHEDIR}"
-        fi
-
         if [ "${SRC: -4}" = '.git' ]; then
             # Source is a git repository
             if [ ! -d "${SRCCACHEDIR}/${NAME}-git" ]; then
-                cd "$SRCCACHEDIR"
-                mkdir "${SRCCACHEDIR}/${NAME}-git"
+                mkdir -p "${SRCCACHEDIR}/${NAME}-git"
                 cd "${SRCCACHEDIR}/${NAME}-git"
                 git init
                 git remote add origin "$SRC"
@@ -440,19 +460,23 @@ shed_build () {
         rm -rf "$WORKDIR"
         return 1
     fi
-
-    if [ ! -d "${BINCACHEDIR}" ]; then
-        mkdir "${BINCACHEDIR}"
+    echo "Successfully built $NAME $VERSION-$REVISION"
+    
+    if [ ! -d "$BINCACHEDIR" ]; then
+        mkdir "$BINCACHEDIR"
     fi
     
     # Strip Binaries
     if $SHOULDSTRIP ; then
+        echo 'Stripping binaries...'
         shed_strip_binaries
     fi
 
     # Archive Build Product
-    tar -caf "${BINCACHEDIR}/$(shed_binary_archive_name)" -C "$SHED_FAKEROOT" .
-
+    echo -n "Creating binary archive $(shed_binary_archive_name)..."
+    tar -caf "${BINCACHEDIR}/$(shed_binary_archive_name)" -C "$SHED_FAKEROOT" . || return 1
+    echo 'done'
+    
     # Clean Up
     cd "$TMPDIR"
     rm -rf "$WORKDIR"
@@ -463,8 +487,6 @@ shed_build () {
             rm "${SRCCACHEDIR}/${SRCFILE}"
         fi
     fi
-
-    echo "Successfully built $NAME $VERSION-$REVISION"
 }
 
 shed_install () {
@@ -505,16 +527,21 @@ shed_install () {
             fi
         else
             if [ ! -r "$BINARCHIVE" ]; then
-                # TODO: Download from the URL specified by BIN
-                # Or, failing that, build it from scratch
-                shed_build || return 1
+                if [ -n "$BIN" ]; then
+                    # Download from the URL specified by BIN
+                    shed_download_binary
+                fi
+                if [ ! -r "$BINARCHIVE" ]; then
+                    # Or, failing that, build it from scratch
+                    shed_build
+                fi
             fi
-
             if [ -r "$BINARCHIVE" ]; then
                 echo "Installing files from binary archive ${NAME}-${VERSION}-${SHED_RELEASE}-${REVISION}-${SHED_BUILDMODE}.tar.xz..."
                 tar xvhf "$BINARCHIVE" -C "$SHED_INSTALLROOT" > "$SHED_INSTALLLOG" || return 1
+                echo 'done'
             else
-                echo "Unable to obtain binary archive ${NAME}-${VERSION}-${SHED_RELEASE}-${REVISION}-${SHED_BUILDMODE}.tar.xz"
+                echo "Unable to produce or obtain binary archive: $(shed_binary_archive_name)"
                 return 1
             fi
         fi

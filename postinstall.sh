@@ -1,7 +1,4 @@
 #!/bin/bash
-sed -i "s/HWCONFIG=.*/HWCONFIG=${SHED_HWCONFIG}/g" /etc/shedmake/shedmake.default
-sed -i "s/NATIVE_TARGET=.*/NATIVE_TARGET=${SHED_NATIVE_TARGET}/g" /etc/shedmake/shedmake.default
-sed -i "s/TOOLCHAIN_TARGET=.*/TOOLCHAIN_TARGET=${SHED_TOOLCHAIN_TARGET}/g" /etc/shedmake/shedmake.default
-if [ ! -e /etc/shedmake/shedmake.conf ]; then
-    install -v -m644 /etc/shedmake/shedmake.default /etc/shedmake/shedmake.conf
+if [ ! -e /etc/shedmake.conf ]; then
+    install -v -m644 /etc/shedmake/shedmake.conf.default /etc/shedmake.conf
 fi
