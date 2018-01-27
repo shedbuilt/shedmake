@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.6.9
+SHEDMAKEVER=0.7.0
 CFGFILE=/etc/shedmake.conf
 
 shed_parse_yes_no () {
@@ -85,6 +85,7 @@ shed_load_defaults () {
 }
 
 shed_parse_args () {
+    PARSEDARGS=( "$@" )
     local OPTION
     local OPTVAL
     while (( $# )); do
@@ -243,23 +244,41 @@ shed_read_package_meta () {
     read -ra BUILDDEPS <<< $(sed -n 's/^BUILDDEPS=//p' ${PKGMETAFILE})
     read -ra INSTALLDEPS <<< $(sed -n 's/^INSTALLDEPS=//p' ${PKGMETAFILE})
     read -ra RUNDEPS <<< $(sed -n 's/^RUNDEPS=//p' ${PKGMETAFILE})
-    export SHED_PKGINSTALLED=false
+    export SHED_INSTALLED_PKGVER=''
     if [ -e "${SHED_LOGDIR}/installed" ]; then
-        SHED_PKGINSTALLED=true
+        SHED_INSTALLED_PKGVER=$(<"${SHED_LOGDIR}/installed")
     fi
-
     if [ -z "$NAME" ] || [ -z "$VERSION" ] || [ -z "$REVISION" ]; then
         echo "Required fields missing from package metadata."
         return 1
     fi
 }
 
-shed_read_package_ver () {
-    if [ -e "${1}/install/installed" ]; then
-        tail "${1}/install/installed"
-    else
-        return 1
-    fi
+shed_resolve_dependencies () {
+    local -n DEPS=$1
+    local DEPACTION=$2
+    local DEPTYPE=$3
+    local DEP
+    echo "Resolving $DEPTYPE dependencies for '$NAME'..."
+    for DEP in "${DEPS[@]}"; do
+        local DEPARGS=( "$DEPACTION" "$DEP" "${PARSEDARGS[@]}" )
+        shedmake "${DEPARGS[@]}"
+        case "$DEPACTION" in
+            install|upgrade)
+                if [ $? -ne 0 ]; then
+                    return 1
+                fi
+            ;;
+            status)
+                # Ensure package is installed, if not up-to-date
+                if [ $? -ne 0 ] && [ $? -ne 2 ]; then
+                    return 1
+                fi
+            ;;
+        esac
+    done
+    # Ensure retval is 0, as shedmake status may have returned a non-zero value
+    return 0
 }
 
 shed_download_source () {
@@ -388,34 +407,17 @@ shed_fetch_source () {
 }
 
 shed_build () {
-    
     if $REQUIREROOT && [[ $EUID -ne 0 ]]; then
         echo "Root privileges are required to build this package."
         return 1
     fi
+    echo "Shedmake is preparing to build '$NAME' (${VERSION}-${REVISION})..."
 
-    # Dependency resolution
-    local DEP
-    for DEP in "${BUILDDEPS[@]}"; do
-        echo "Searching for build dependency '$DEP'..."
-        local DEPPKGLOC
-        DEPPKGLOC=$(shed_locate_package "$DEP" "false")
-        if [ $? -ne 0 ]; then
-            echo "Build dependency '${DEP}' is not present in a managed package repository"
-            return 1
-        fi
-        echo "Checking installed version at ${DEPPKGLOC}..."
-        if ! shed_read_package_ver "$DEPPKGLOC"; then
-            echo "Package for dependency '${DEP}' is present but not installed"
-            return 1
-        fi
-    done
-    
+    # Working directory management
     WORKDIR="${TMPDIR%/}/${NAME}"
     rm -rf "$WORKDIR"
     mkdir -p "$WORKDIR"
     export SHED_FAKEROOT="${WORKDIR}/fakeroot"
-    echo "Shedmake is preparing to build $NAME $VERSION-$REVISION..."
 
     # Source acquisition and unpacking
     shed_fetch_source || return 1
@@ -490,16 +492,13 @@ shed_build () {
 }
 
 shed_install () {
-    
     if $REQUIREROOT && [[ $EUID -ne 0 ]]; then
         echo "Root privileges are required to install this package."
         return 1
     fi
+    echo "Shedmake is preparing to install '$NAME' (${VERSION}-${REVISION}) to ${SHED_INSTALLROOT}..."
 
-    echo "Shedmake is preparing to install $NAME $VERSION-$REVISION to ${SHED_INSTALLROOT}..."
-    BINARCHIVE="${BINCACHEDIR}/$(shed_binary_archive_name)"
     SHED_CHROOT_PKGDIR=$(echo "$SHED_PKGDIR" | sed 's|'${SHED_INSTALLROOT%/}'/|/|')
-
     if [ ! -d "${SHED_LOGDIR}" ]; then
         mkdir "${SHED_LOGDIR}"
     fi
@@ -526,6 +525,7 @@ shed_install () {
                 shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" install.sh || return 1
             fi
         else
+            BINARCHIVE="${BINCACHEDIR}/$(shed_binary_archive_name)"
             if [ ! -r "$BINARCHIVE" ]; then
                 if [ -n "$BIN" ]; then
                     # Download from the URL specified by BIN
@@ -533,13 +533,16 @@ shed_install () {
                 fi
                 if [ ! -r "$BINARCHIVE" ]; then
                     # Or, failing that, build it from scratch
-                    shed_build
+                    shedmake build "${SHED_PKGDIR}" "${PARSEDARGS[@]}"
                 fi
             fi
             if [ -r "$BINARCHIVE" ]; then
-                echo "Installing files from binary archive ${NAME}-${VERSION}-${SHED_RELEASE}-${REVISION}-${SHED_BUILDMODE}.tar.xz..."
+                echo "Installing files from binary archive $(shed_binary_archive_name)..."
                 tar xvhf "$BINARCHIVE" -C "$SHED_INSTALLROOT" > "$SHED_INSTALLLOG" || return 1
                 echo 'done'
+                if ! $KEEPBINARY; then
+                    rm "$BINARCHIVE"
+                fi
             else
                 echo "Unable to produce or obtain binary archive: $(shed_binary_archive_name)"
                 return 1
@@ -566,12 +569,7 @@ shed_install () {
     # Record Installation
     echo "${VERSION}-${REVISION}" > "${SHED_LOGDIR}/installed"
 
-    # Clean Up
-    if ! $KEEPBINARY; then
-        rm "$BINARCHIVE"
-    fi
-
-    echo "Successfully installed $NAME $VERSION-$REVISION"
+    echo "Successfully installed '$NAME' (${VERSION}-${REVISION})"
 }
 
 shed_string_in_array () {
@@ -654,22 +652,32 @@ shed_clean_repos () {
     done
 }
 
+shed_package_status () {
+    # NOTE: Reserve retval 1 for packages not found in managed repositories
+    if [ -n "$SHED_INSTALLED_PKGVER" ]; then
+        if [ "${VERSION}-${REVISION}" == "$SHED_INSTALLED_PKGVER" ]; then
+            echo "Package '$NAME' is installed and up-to-date ($SHED_INSTALLED_PKGVER)"
+            return 0
+        else  
+            echo "Package '$NAME' ($SHED_INSTALLED_PKGVER) is installed but ${VERSION}-${REVISION} is available"
+            return 2
+        fi
+    else
+        echo "Package '$NAME' (${VERSION}-${REVISION}) is present but not installed"
+        return 3
+    fi
+}
+
 shed_upgrade () {
     if $REQUIREROOT && [[ $EUID -ne 0 ]]; then
             echo "Root privileges are required to upgrade this package."
             return 1
     fi
-    if $SHED_PKGINSTALLED; then
-        grep -Fxq "${VERSION}-${REVISION}" "${SHED_LOGDIR}/installed"
-        if [ $? -eq 0 ]; then
-            echo "Package ${NAME} is already up-to-date (${VERSION}-${REVISION})"
-            return 0
-        fi
-    else
-        echo "Package $NAME is not installed"
-        return 1
+    shed_package_status
+    if [ $? -eq 2 ]; then
+        shed_resolve_dependencies INSTALLDEPS 'upgrade' 'install' && \
+        shed_install
     fi
-    shed_install
 }
 
 shed_upgrade_repos () {
@@ -721,6 +729,7 @@ shed_command () {
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" && \
+            shed_resolve_dependencies BUILDDEPS 'status' 'build' && \
             shed_build
             ;;
         clean|clean-list)
@@ -748,7 +757,13 @@ shed_command () {
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" && \
+            shed_resolve_dependencies INSTALLDEPS 'install' 'install' && \
             shed_install
+            ;;
+        status)
+            shed_load_defaults && \
+            shed_read_package_meta "$1" && \
+            shed_package_status
             ;;
         update-repo|update-repo-list)
             CMDREPOS=( "$1" )
@@ -770,6 +785,8 @@ shed_command () {
         upgrade-repo|upgrade-repo-list)
             CMDREPOS=( "$1" )
             shed_load_defaults && \
+            shift && \
+            shed_parse_args "$@" && \
             shed_upgrade_repos CMDREPOS
             ;;
         upgrade-all)
@@ -790,7 +807,7 @@ shed_command () {
 # Check for -list action prefix
 if [ $# -gt 0 ] && [ "${1: -5}" = '-list' ]; then
     if [ $# -lt 2 ]; then
-        echo "Too few arguments to list-based action. Expected: shedmake <action> <listfile> <option 1> ..."
+        echo "Too few arguments to list-based action. Expected: shedmake <list action> <list file> <option 1> ..."
         exit 1
     elif [ ! -r "$2" ]; then
         echo "Unable to read from list file: '$2'"
