@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.7.0
+SHEDMAKEVER=0.7.1
 CFGFILE=/etc/shedmake.conf
 
 shed_parse_yes_no () {
@@ -66,6 +66,7 @@ DEFAULT_KEEPSOURCE=$(shed_parse_yes_no "$(sed -n 's/^KEEPSRC=//p' $CFGFILE)")
 DEFAULT_KEEPBINARY=$(shed_parse_yes_no "$(sed -n 's/^KEEPBIN=//p' $CFGFILE)")
                                                                             
 shed_load_defaults () {
+    FORCEACTION=false
     SHOULDSTRIP=true
     KEEPSOURCE="$DEFAULT_KEEPSOURCE"
     KEEPBINARY="$DEFAULT_KEEPBINARY"
@@ -93,6 +94,10 @@ shed_parse_args () {
         shift
         # Check for unary options
         case "$OPTION" in
+            -f|--force)
+                FORCEACTION=true
+                continue
+                ;;
             -v|--verbose)
                 SHED_VERBOSE=true
                 continue
@@ -496,6 +501,13 @@ shed_install () {
         echo "Root privileges are required to install this package."
         return 1
     fi
+
+    # Check for existing installation
+    if [ -n "$SHED_INSTALLED_PKGVER" ] && ! $FORCEACTION; then
+        echo "Package '$NAME' is already installed (${SHED_INSTALLED_PKGVER})"
+        return 0
+    fi
+
     echo "Shedmake is preparing to install '$NAME' (${VERSION}-${REVISION}) to ${SHED_INSTALLROOT}..."
 
     SHED_CHROOT_PKGDIR=$(echo "$SHED_PKGDIR" | sed 's|'${SHED_INSTALLROOT%/}'/|/|')
@@ -506,7 +518,7 @@ shed_install () {
     # Pre-Installation
     if [ -a "${SHED_PKGDIR}/preinstall.sh" ]; then
         if $SHOULDPREINSTALL; then
-            if [ "$SHED_INSTALLROOT" = '/' ]; then
+            if [ "$SHED_INSTALLROOT" == '/' ]; then
                 bash "${SHED_PKGDIR}/preinstall.sh" || return 1
             else
                 shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" preinstall.sh || return 1
@@ -519,7 +531,7 @@ shed_install () {
     # Installation
     if $SHOULDINSTALL; then
         if [ -a "${SHED_PKGDIR}/install.sh" ]; then
-            if [ "$SHED_INSTALLROOT" = '/' ]; then
+            if [ "$SHED_INSTALLROOT" == '/' ]; then
                 bash "${SHED_PKGDIR}/install.sh" || return 1
             else
                 shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" install.sh || return 1
@@ -556,7 +568,7 @@ shed_install () {
     if [ -a "${SHED_PKGDIR}/postinstall.sh" ]; then
         if $SHOULDPOSTINSTALL; then
             echo "Running post-install script for $NAME $VERSION-$REVISION..."
-            if [ "$SHED_INSTALLROOT" = '/' ]; then
+            if [ "$SHED_INSTALLROOT" == '/' ]; then
                 bash "${SHED_PKGDIR}/postinstall.sh" || return 1
             else
                 shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" postinstall.sh || return 1
@@ -675,6 +687,7 @@ shed_upgrade () {
     fi
     shed_package_status
     if [ $? -eq 2 ]; then
+        FORCEACTION=true
         shed_resolve_dependencies INSTALLDEPS 'upgrade' 'install' && \
         shed_install
     fi
