@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.7.1
+SHEDMAKEVER=0.7.2
 CFGFILE=/etc/shedmake.conf
 
 shed_parse_yes_no () {
@@ -67,6 +67,7 @@ DEFAULT_KEEPBINARY=$(shed_parse_yes_no "$(sed -n 's/^KEEPBIN=//p' $CFGFILE)")
                                                                             
 shed_load_defaults () {
     FORCEACTION=false
+    IGNOREDEPS=false
     SHOULDSTRIP=true
     KEEPSOURCE="$DEFAULT_KEEPSOURCE"
     KEEPBINARY="$DEFAULT_KEEPBINARY"
@@ -94,6 +95,10 @@ shed_parse_args () {
         shift
         # Check for unary options
         case "$OPTION" in
+            -D|--ignore-dependencies)
+                IGNOREDEPS=true
+                continue
+                ;;
             -f|--force)
                 FORCEACTION=true
                 continue
@@ -264,24 +269,26 @@ shed_resolve_dependencies () {
     local DEPACTION=$2
     local DEPTYPE=$3
     local DEP
-    echo "Resolving $DEPTYPE dependencies for '$NAME'..."
-    for DEP in "${DEPS[@]}"; do
-        local DEPARGS=( "$DEPACTION" "$DEP" "${PARSEDARGS[@]}" )
-        shedmake "${DEPARGS[@]}"
-        case "$DEPACTION" in
-            install|upgrade)
-                if [ $? -ne 0 ]; then
-                    return 1
-                fi
-            ;;
-            status)
-                # Ensure package is installed, if not up-to-date
-                if [ $? -ne 0 ] && [ $? -ne 2 ]; then
-                    return 1
-                fi
-            ;;
-        esac
-    done
+    if ! $IGNOREDEPS && [ ${#DEPS[@]} -gt 0 ]; then
+        echo "Resolving $DEPTYPE dependencies for '$NAME'..."
+        for DEP in "${DEPS[@]}"; do
+            local DEPARGS=( "$DEPACTION" "$DEP" "${PARSEDARGS[@]}" )
+            shedmake "${DEPARGS[@]}"
+            case "$DEPACTION" in
+                install|upgrade)
+                    if [ $? -ne 0 ]; then
+                        return 1
+                    fi
+                ;;
+                status)
+                    # Ensure package is installed, if not up-to-date
+                    if [ $? -ne 0 ] && [ $? -ne 2 ]; then
+                        return 1
+                    fi
+                ;;
+            esac
+        done
+    fi
     # Ensure retval is 0, as shedmake status may have returned a non-zero value
     return 0
 }
