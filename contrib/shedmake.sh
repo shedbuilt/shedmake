@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.7.2
+SHEDMAKEVER=0.8.0
 CFGFILE=/etc/shedmake.conf
 
 shed_parse_yes_no () {
@@ -74,6 +74,7 @@ shed_load_defaults () {
     SHOULDPREINSTALL=true
     SHOULDINSTALL=true
     SHOULDPOSTINSTALL=true
+    SHOULDCLEANUP=false
     REQUIREROOT=false
     export SHED_VERBOSE=false
     export SHED_BUILDMODE=release
@@ -95,7 +96,7 @@ shed_parse_args () {
         shift
         # Check for unary options
         case "$OPTION" in
-            -D|--ignore-dependencies)
+            -i|--ignore-dependencies)
                 IGNOREDEPS=true
                 continue
                 ;;
@@ -132,13 +133,22 @@ shed_parse_args () {
         esac
         
         case "$OPTION" in
-            -c|--compression)
+            -a|--archive-compression)
                 shed_set_binary_archive_compression "$OPTVAL" || return 1
+                ;;
+            -c|--cleanup)
+                OPTVAL=$(shed_parse_yes_no "$OPTVAL")
+                if [ $? -eq 0 ]; then
+                    SHOULDCLEANUP=$OPTVAL
+                else
+                    echo "Invalid argument for '$OPTION' Please specify 'yes' or 'no'"
+                    return 1
+                fi
                 ;;
             -h|--host)
                 SHED_HOST="$OPTVAL"
                 ;;
-            -i|--install-root)
+            -r|--install-root)
                 SHED_INSTALLROOT="$OPTVAL"
                 ;;
             -j|--jobs)
@@ -235,7 +245,8 @@ shed_read_package_meta () {
     NAME=$(sed -n 's/^NAME=//p' ${PKGMETAFILE})
     VERSION=$(sed -n 's/^VERSION=//p' ${PKGMETAFILE})
     REVISION=$(sed -n 's/^REVISION=//p' ${PKGMETAFILE})
-    export SHED_INSTALLLOG="${SHED_LOGDIR}/${VERSION}-${REVISION}.log"
+    export SHED_VERSION_TUPLE="${VERSION}-${REVISION}"
+    export SHED_INSTALL_BOM="${SHED_LOGDIR}/${SHED_VERSION_TUPLE}.bom"
     SRC=$(sed -n 's/^SRC=//p' ${PKGMETAFILE})
     SRCFILE=$(sed -n 's/^SRCFILE=//p' ${PKGMETAFILE})
     if [ -z "$SRCFILE" ] && [ -n "$SRC" ]; then
@@ -246,6 +257,9 @@ shed_read_package_meta () {
     if [ "$(sed -n 's/^STRIP=//p' ${PKGMETAFILE})" = 'no' ]; then
         SHOULDSTRIP=false
     fi
+    if [ "$(sed -n 's/^CLEANUP=//p' ${PKGMETAFILE})" = 'yes' ]; then
+        SHOULDCLEANUP=true
+    fi
     BIN=$(sed -n 's/^BIN=//p' ${PKGMETAFILE})
     BINFILE=$(sed -n 's/^BINFILE=//p' ${PKGMETAFILE})
     if [ -z "$BINFILE" ] && [ -n "$BIN" ]; then
@@ -254,9 +268,10 @@ shed_read_package_meta () {
     read -ra BUILDDEPS <<< $(sed -n 's/^BUILDDEPS=//p' ${PKGMETAFILE})
     read -ra INSTALLDEPS <<< $(sed -n 's/^INSTALLDEPS=//p' ${PKGMETAFILE})
     read -ra RUNDEPS <<< $(sed -n 's/^RUNDEPS=//p' ${PKGMETAFILE})
-    export SHED_INSTALLED_PKGVER=''
-    if [ -e "${SHED_LOGDIR}/installed" ]; then
-        SHED_INSTALLED_PKGVER=$(<"${SHED_LOGDIR}/installed")
+    export SHED_INSTALL_HISTORY="${SHED_LOGDIR}/install.log"
+    export SHED_INSTALLED_VERSION_TUPLE=''
+    if [ -e "$SHED_INSTALL_HISTORY" ]; then
+        SHED_INSTALLED_VERSION_TUPLE=$(tail -n 1 "$SHED_INSTALL_HISTORY")
     fi
     if [ -z "$NAME" ] || [ -z "$VERSION" ] || [ -z "$REVISION" ]; then
         echo "Required fields missing from package metadata."
@@ -321,13 +336,75 @@ shed_verify_source () {
 }
 
 shed_strip_binaries () {
+    local STRIPFOLDER
     # Strip all binaries and libraries, except explicitly created .dbg symbol files
-    find "${SHED_FAKEROOT}/usr/lib" -type f -name \*.a \
-        -exec strip --strip-debug {} ';'
-    find "${SHED_FAKEROOT}/lib" "${SHED_FAKEROOT}/usr/lib" -type f \( -name \*.so* -a ! -name \*dbg \) \
-        -exec strip --strip-unneeded {} ';'
-    find ${SHED_FAKEROOT}/{bin,sbin} ${SHED_FAKEROOT}/usr/{bin,sbin,libexec} -type f \
-         -exec strip --strip-all {} ';'
+    if [ -d "${SHED_FAKEROOT}/usr/lib" ]; then
+        find "${SHED_FAKEROOT}/usr/lib" -type f -name \*.a \
+            -exec strip --strip-debug {} ';'
+    fi
+    for STRIPFOLDER in "${SHED_FAKEROOT}/lib" "${SHED_FAKEROOT}/usr/lib"
+    do
+        if [ -d "$STRIPFOLDER" ]; then
+            find "$STRIPFOLDER" -type f \( -name \*.so* -a ! -name \*dbg \) \
+                -exec strip --strip-unneeded {} ';'
+        fi
+    done
+    for STRIPFOLDER in "${SHED_FAKEROOT}"/{bin,sbin} "${SHED_FAKEROOT}"/usr/{bin,sbin,libexec}
+    do
+        if [ -d "$STRIPFOLDER" ]; then
+            find "$STRIPFOLDER" -type f \
+                -exec strip --strip-all {} ';'
+        fi
+    done
+}
+
+shed_cleanup () {
+    local NEWVERSION="$1"
+    local OLDVERSION="$2"
+    local PATHSTODELETE=''
+    cd "$SHED_LOGDIR"
+    if [ -z "$OLDVERSION" ] || [ "$NEWVERSION" == "$OLDVERSION" ]; then
+        if $SHED_VERBOSE; then
+            echo "No need to clean up orphaned files between specified versions."
+        fi
+        return 0
+    fi
+    if [ ! -e ${OLDVERSION}.bom ]; then
+        echo "Unable to retrieve install log for previous version '$OLDVERSION'"
+        return 1
+    fi
+    if [ -z "$NEWVERSION" ]; then
+        # Delete all files from old version if no new version replaces it
+        PATHSTODELETE="$(<${OLDVERSION}.bom)"
+    elif [ ! -e ${NEWVERSION}.bom ]; then
+        echo "Unable to retrieve install log for current version '$NEWVERSION'"
+        return 1
+    else
+        PATHSTODELETE="$(comm -13 ${NEWVERSION}.bom ${OLDVERSION}.bom)"
+    fi
+    local OLDPATH
+    local PATHTYPE
+    for PATHTYPE in files directories
+    do
+        while read -ra OLDPATH
+        do
+            if [ ${#OLDPATH} -gt 2 ] && [[ "${OLDPATH:0:2}" == './' ]]; then
+                local INSTALLEDPATH="${SHED_INSTALLROOT%/}/${OLDPATH:2}"
+                case $PATHTYPE in
+                    files)
+                        if [ ! -d "$INSTALLEDPATH" ]; then
+                            rm -v "$INSTALLEDPATH"
+                        fi
+                        ;;
+                    directories)
+                        if [ -d "$INSTALLEDPATH" ]; then
+                            rmdir -v "$INSTALLEDPATH"
+                        fi
+                        ;;
+                esac      
+            fi
+        done <<< "$PATHSTODELETE"
+    done
 }
 
 shed_run_chroot_script () {
@@ -349,7 +426,8 @@ shed_run_chroot_script () {
     SHED_NATIVE_TARGET="$SHED_NATIVE_TARGET" \
     SHED_TOOLCHAIN_TARGET="$SHED_TOOLCHAIN_TARGET" \
     SHED_INSTALLROOT='/' \
-    SHED_INSTALLLOG="${2}/install/${VERSION}-${REVISION}.log" \
+    SHED_VERSION_TUPLE="$SHED_VERSION_TUPLE" \
+    SHED_INSTALL_BOM="${2}/install/${SHED_VERSION_TUPLE}.bom" \
     bash "${2}/${3}"
 }
 
@@ -358,7 +436,6 @@ shed_add () {
         echo "Root privileges are required to track a new package repository."
         return 1
     fi
-
     local REPOURL="$1"
     local REPOBRANCH="$2"
     local REPOFILE="$(basename $REPOURL)"
@@ -482,8 +559,9 @@ shed_build () {
     
     # Strip Binaries
     if $SHOULDSTRIP ; then
-        echo 'Stripping binaries...'
+        echo -n 'Stripping binaries...'
         shed_strip_binaries
+        echo 'done'
     fi
 
     # Archive Build Product
@@ -491,7 +569,7 @@ shed_build () {
     tar -caf "${BINCACHEDIR}/$(shed_binary_archive_name)" -C "$SHED_FAKEROOT" . || return 1
     echo 'done'
     
-    # Clean Up
+    # Delete Source
     cd "$TMPDIR"
     rm -rf "$WORKDIR"
     if ! $KEEPSOURCE && [ -n "$SRC" ]; then
@@ -510,8 +588,8 @@ shed_install () {
     fi
 
     # Check for existing installation
-    if [ -n "$SHED_INSTALLED_PKGVER" ] && ! $FORCEACTION; then
-        echo "Package '$NAME' is already installed (${SHED_INSTALLED_PKGVER})"
+    if [ -n "$SHED_INSTALLED_VERSION_TUPLE" ] && ! $FORCEACTION; then
+        echo "Package '$NAME' is already installed (${SHED_INSTALLED_VERSION_TUPLE})"
         return 0
     fi
 
@@ -556,8 +634,8 @@ shed_install () {
                 fi
             fi
             if [ -r "$BINARCHIVE" ]; then
-                echo "Installing files from binary archive $(shed_binary_archive_name)..."
-                tar xvhf "$BINARCHIVE" -C "$SHED_INSTALLROOT" > "$SHED_INSTALLLOG" || return 1
+                echo -n "Installing files from binary archive $(shed_binary_archive_name)..."
+                tar xvhf "$BINARCHIVE" -C "$SHED_INSTALLROOT" > "$SHED_INSTALL_BOM" || return 1
                 echo 'done'
                 if ! $KEEPBINARY; then
                     rm "$BINARCHIVE"
@@ -584,9 +662,17 @@ shed_install () {
             echo "Skipping the post-install phase."
         fi
     fi
-    
+
+    # Sort Install Log
+    sort "$SHED_INSTALL_BOM" -o "$SHED_INSTALL_BOM"
+
     # Record Installation
-    echo "${VERSION}-${REVISION}" > "${SHED_LOGDIR}/installed"
+    echo "$SHED_VERSION_TUPLE" >> "$SHED_INSTALL_HISTORY"
+
+    # Clean Up Old Files
+    if $SHOULDCLEANUP && [ -n "$SHED_INSTALLED_VERSION_TUPLE" ]; then
+        shed_cleanup "$SHED_VERSION_TUPLE" "$SHED_INSTALLED_VERSION_TUPLE"
+    fi
 
     echo "Successfully installed '$NAME' (${VERSION}-${REVISION})"
 }
@@ -673,12 +759,12 @@ shed_clean_repos () {
 
 shed_package_status () {
     # NOTE: Reserve retval 1 for packages not found in managed repositories
-    if [ -n "$SHED_INSTALLED_PKGVER" ]; then
-        if [ "${VERSION}-${REVISION}" == "$SHED_INSTALLED_PKGVER" ]; then
-            echo "Package '$NAME' is installed and up-to-date ($SHED_INSTALLED_PKGVER)"
+    if [ -n "$SHED_INSTALLED_VERSION_TUPLE" ]; then
+        if [ "${VERSION}-${REVISION}" == "$SHED_INSTALLED_VERSION_TUPLE" ]; then
+            echo "Package '$NAME' is installed and up-to-date ($SHED_INSTALLED_VERSION_TUPLE)"
             return 0
         else  
-            echo "Package '$NAME' ($SHED_INSTALLED_PKGVER) is installed but ${VERSION}-${REVISION} is available"
+            echo "Package '$NAME' ($SHED_INSTALLED_VERSION_TUPLE) is installed but ${VERSION}-${REVISION} is available"
             return 2
         fi
     else
@@ -723,6 +809,10 @@ shed_upgrade_repos () {
     done
 }
 
+shed_print_args_error () {
+    echo "Too few arguments to '$1'. Usage: shedmake $1 $2"
+}
+
 shed_command () {
     local SHEDCMD
     local CMDREPOS
@@ -736,8 +826,8 @@ shed_command () {
         add|add-list)
             local TRACK="$SHED_RELEASE"
             if [ $# -lt 1 ]; then
-                echo "Too few arguments to 'add'. Usage: shedmake add <REPO_URL> <REPO_BRANCH>"
-                exit 1
+                shed_print_args_error "$SHEDCMD" "<repo_url> <repo_branch>"
+                return 1
             elif [ $# -gt 1 ]; then
                 TRACK="$2"
             fi
@@ -766,6 +856,18 @@ shed_command () {
             CMDREPOS=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
             shed_load_defaults && \
             shed_clean_repos CMDREPOS
+            ;;
+        cleanup)
+            shed_load_defaults && \
+            shed_read_package_meta "$1" && \
+            shift && \
+            shed_parse_args "$@" || return 1
+            if [ ! -e "$SHED_INSTALL_HISTORY" ]; then
+                echo "Unable to locate installed version history for '$NAME'"
+                return 1
+            fi
+            local OLDVERSIONTUPLE="$(tail -n 2 `$SHED_INSTALL_HISTORY` | head -n 1)"
+            shed_cleanup "$SHED_INSTALLED_VERSION_TUPLE" "$OLDVERSIONTUPLE"
             ;;
         fetch-source|fetch-source-list)
             shed_load_defaults && \
