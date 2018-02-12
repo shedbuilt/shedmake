@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.8.0
+SHEDMAKEVER=0.8.1
 CFGFILE=/etc/shedmake.conf
 
 shed_parse_yes_no () {
@@ -185,7 +185,7 @@ shed_binary_archive_name () {
     if [ -n "$BINFILE" ]; then
         eval echo "$BINFILE"
     else
-        echo "${NAME}_${VERSION}_${REVISION}_${SHED_RELEASE}_${SHED_BUILDMODE}_${SHED_CPU_CORE}_${SHED_CPU_FEATURES}.${BINARCHEXT}"
+        echo "${NAME}_${VERSION}-${REVISION}_${SHED_RELEASE}_${SHED_BUILDMODE}_${SHED_CPU_CORE}_${SHED_CPU_FEATURES}.${BINARCHEXT}"
     fi
 }
 
@@ -342,14 +342,14 @@ shed_strip_binaries () {
         find "${SHED_FAKEROOT}/usr/lib" -type f -name \*.a \
             -exec strip --strip-debug {} ';'
     fi
-    for STRIPFOLDER in "${SHED_FAKEROOT}/lib" "${SHED_FAKEROOT}/usr/lib"
+    for STRIPFOLDER in "${SHED_FAKEROOT}"/lib "${SHED_FAKEROOT}"/usr/{,local/}lib
     do
         if [ -d "$STRIPFOLDER" ]; then
             find "$STRIPFOLDER" -type f \( -name \*.so* -a ! -name \*dbg \) \
                 -exec strip --strip-unneeded {} ';'
         fi
     done
-    for STRIPFOLDER in "${SHED_FAKEROOT}"/{bin,sbin} "${SHED_FAKEROOT}"/usr/{bin,sbin,libexec}
+    for STRIPFOLDER in "${SHED_FAKEROOT}"/{bin,sbin} "${SHED_FAKEROOT}"/usr/{,local/}{bin,sbin,libexec}
     do
         if [ -d "$STRIPFOLDER" ]; then
             find "$STRIPFOLDER" -type f \
@@ -458,6 +458,35 @@ shed_add () {
     echo "Added '$REPONAME' to '${LOCALREPOS[0]}' package repository."
 }
 
+shed_add_repo () {
+    if [[ $EUID -ne 0 ]]; then
+        echo "Root privileges are required to track a new package repository."
+        return 1
+    fi
+    local REPOURL="$1"
+    local REPOBRANCH="$2"
+    local REPOFILE="$(basename $REPOURL)"
+    local REPONAME="$(basename $REPOFILE .git)"
+    cd "$REPODIR"
+    local REPOS=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
+    local REPO
+    for REPO in "${REPOS[@]}"; do
+        if [ ! -d "$REPO" ]; then
+            continue
+        elif [ "$REPO" == "$REPONAME" ]; then
+            echo "A repository named '$REPONAME' is already present in '$REPODIR'"
+            return 1
+        fi
+    done
+    git clone "$REPOURL" "$REPONAME" && \
+    cd "$REPONAME" && \
+    git checkout "$REPOBRANCH" && \
+    git submodule init && \
+    git submodule update || return 1
+    # Append to remote repositories
+    sed -i "/^REMOTE_REPOS=/ s/\$/ ${REPONAME}/" "$CFGFILE"
+}
+
 shed_fetch_source () {
    if [ -n "$SRC" ]; then
         if [ "${SRC: -4}" = '.git' ]; then
@@ -500,7 +529,7 @@ shed_build () {
         echo "Root privileges are required to build this package."
         return 1
     fi
-    echo "Shedmake is preparing to build '$NAME' (${VERSION}-${REVISION})..."
+    echo "Shedmake will build '$NAME' (${VERSION}-${REVISION})..."
 
     # Working directory management
     WORKDIR="${TMPDIR%/}/${NAME}"
@@ -593,7 +622,7 @@ shed_install () {
         return 0
     fi
 
-    echo "Shedmake is preparing to install '$NAME' (${VERSION}-${REVISION}) to ${SHED_INSTALLROOT}..."
+    echo "Shedmake will install '$NAME' (${VERSION}-${REVISION}) to ${SHED_INSTALLROOT}..."
 
     SHED_CHROOT_PKGDIR=$(echo "$SHED_PKGDIR" | sed 's|'${SHED_INSTALLROOT%/}'/|/|')
     if [ ! -d "${SHED_LOGDIR}" ]; then
@@ -667,7 +696,9 @@ shed_install () {
     sort "$SHED_INSTALL_BOM" -o "$SHED_INSTALL_BOM"
 
     # Record Installation
-    echo "$SHED_VERSION_TUPLE" >> "$SHED_INSTALL_HISTORY"
+    if [ "$SHED_VERSION_TUPLE" != "$SHED_INSTALLED_VERSION_TUPLE" ]; then
+        echo "$SHED_VERSION_TUPLE" >> "$SHED_INSTALL_HISTORY"
+    fi
 
     # Clean Up Old Files
     if $SHOULDCLEANUP && [ -n "$SHED_INSTALLED_VERSION_TUPLE" ]; then
@@ -823,7 +854,7 @@ shed_command () {
     fi
 
     case "$SHEDCMD" in
-        add|add-list)
+        add|add-list|add-repo|add-repo-list)
             local TRACK="$SHED_RELEASE"
             if [ $# -lt 1 ]; then
                 shed_print_args_error "$SHEDCMD" "<repo_url> <repo_branch>"
@@ -831,8 +862,12 @@ shed_command () {
             elif [ $# -gt 1 ]; then
                 TRACK="$2"
             fi
-            shed_load_defaults && \
-            shed_add "$1" "$TRACK"
+            shed_load_defaults || exit 1
+            if [ "$SHEDCMD" == 'add' ] || [ "$SHEDCMD" == 'add-list' ]; then
+                shed_add "$1" "$TRACK"
+            else
+                shed_add_repo "$1" "$TRACK"
+            fi
             ;;
         build|build-list)
             shed_load_defaults && \
@@ -857,7 +892,7 @@ shed_command () {
             shed_load_defaults && \
             shed_clean_repos CMDREPOS
             ;;
-        cleanup)
+        cleanup|uninstall)
             shed_load_defaults && \
             shed_read_package_meta "$1" && \
             shift && \
@@ -866,8 +901,16 @@ shed_command () {
                 echo "Unable to locate installed version history for '$NAME'"
                 return 1
             fi
-            local OLDVERSIONTUPLE="$(tail -n 2 `$SHED_INSTALL_HISTORY` | head -n 1)"
-            shed_cleanup "$SHED_INSTALLED_VERSION_TUPLE" "$OLDVERSIONTUPLE"
+            local OLDVERSIONTUPLE
+            local NEWVERSIONTUPLE
+            if [ "$SHEDCMD" == 'cleanup' ]; then
+                OLDVERSIONTUPLE="$(tail -n 2 `$SHED_INSTALL_HISTORY` | head -n 1)"
+                NEWVERSIONTUPLE="$SHED_INSTALLED_VERSION_TUPLE"
+            else
+                OLDVERSIONTUPLE="$SHED_INSTALLED_VERSION_TUPLE"
+                NEWVERSIONTUPLE=""
+            fi
+            shed_cleanup "$NEWVERSIONTUPLE" "$OLDVERSIONTUPLE"
             ;;
         fetch-source|fetch-source-list)
             shed_load_defaults && \
