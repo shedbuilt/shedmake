@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.8.1
+SHEDMAKEVER=0.8.2
 CFGFILE=/etc/shedmake.conf
 
 shed_parse_yes_no () {
@@ -193,7 +193,6 @@ shed_locate_package () {
     #Verify existence of directory and package metadata
     local COULDBEPATH="$2"
     local PKGDIR
-
     if $COULDBEPATH && [ -d "$1" ]; then
         PKGDIR=$(readlink -f -n "$1")
     else
@@ -288,24 +287,9 @@ shed_resolve_dependencies () {
         echo "Resolving $DEPTYPE dependencies for '$NAME'..."
         for DEP in "${DEPS[@]}"; do
             local DEPARGS=( "$DEPACTION" "$DEP" "${PARSEDARGS[@]}" )
-            shedmake "${DEPARGS[@]}"
-            case "$DEPACTION" in
-                install|upgrade)
-                    if [ $? -ne 0 ]; then
-                        return 1
-                    fi
-                ;;
-                status)
-                    # Ensure package is installed, if not up-to-date
-                    if [ $? -ne 0 ] && [ $? -ne 2 ]; then
-                        return 1
-                    fi
-                ;;
-            esac
+            shedmake "${DEPARGS[@]}" || return 1
         done
     fi
-    # Ensure retval is 0, as shedmake status may have returned a non-zero value
-    return 0
 }
 
 shed_download_source () {
@@ -384,6 +368,7 @@ shed_cleanup () {
     fi
     local OLDPATH
     local PATHTYPE
+    echo "Shedmake will delete files orphaned when '$NAME' was upgraded from $OLDVERSION to $NEWVERSION..."
     for PATHTYPE in files directories
     do
         while read -ra OLDPATH
@@ -874,7 +859,7 @@ shed_command () {
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" && \
-            shed_resolve_dependencies BUILDDEPS 'status' 'build' && \
+            shed_resolve_dependencies BUILDDEPS 'install' 'build' && \
             shed_build
             ;;
         clean|clean-list)
@@ -904,7 +889,7 @@ shed_command () {
             local OLDVERSIONTUPLE
             local NEWVERSIONTUPLE
             if [ "$SHEDCMD" == 'cleanup' ]; then
-                OLDVERSIONTUPLE="$(tail -n 2 `$SHED_INSTALL_HISTORY` | head -n 1)"
+                OLDVERSIONTUPLE="$(tail -n 2 $SHED_INSTALL_HISTORY | head -n 1)"
                 NEWVERSIONTUPLE="$SHED_INSTALLED_VERSION_TUPLE"
             else
                 OLDVERSIONTUPLE="$SHED_INSTALLED_VERSION_TUPLE"
