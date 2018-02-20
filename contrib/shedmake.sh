@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.8.2
+SHEDMAKEVER=0.8.3
 CFGFILE=/etc/shedmake.conf
 
 shed_parse_yes_no () {
@@ -67,14 +67,15 @@ DEFAULT_KEEPBINARY=$(shed_parse_yes_no "$(sed -n 's/^KEEPBIN=//p' $CFGFILE)")
                                                                             
 shed_load_defaults () {
     FORCEACTION=false
-    IGNOREDEPS=false
-    SHOULDSTRIP=true
     KEEPSOURCE="$DEFAULT_KEEPSOURCE"
     KEEPBINARY="$DEFAULT_KEEPBINARY"
+    SHOULDIGNOREDEPS=false
+    SHOULDINSTALLDEPS=false
     SHOULDPREINSTALL=true
     SHOULDINSTALL=true
     SHOULDPOSTINSTALL=true
     SHOULDCLEANUP=false
+    SHOULDSTRIP=true
     REQUIREROOT=false
     export SHED_VERBOSE=false
     export SHED_BUILDMODE=release
@@ -82,7 +83,6 @@ shed_load_defaults () {
     export SHED_HOST=native
     export SHED_INSTALLROOT='/'
     export SHED_NUMJOBS="$DEFAULT_NUMJOBS"
-    export SHED_HWCONFIG="$DEFAULT_DEVICE"
     export SHED_DEVICE="$DEFAULT_DEVICE"
     shed_set_binary_archive_compression "$DEFAULT_COMPRESSION"
 }
@@ -96,16 +96,16 @@ shed_parse_args () {
         shift
         # Check for unary options
         case "$OPTION" in
-            -i|--ignore-dependencies)
-                IGNOREDEPS=true
-                continue
-                ;;
             -f|--force)
                 FORCEACTION=true
                 continue
                 ;;
-            -v|--verbose)
-                SHED_VERBOSE=true
+            -I|--ignore-dependencies)
+                SHOULDIGNOREDEPS=true
+                continue
+                ;;
+            -i|--install-dependencies)
+                SHOULDINSTALLDEPS=true
                 continue
                 ;;
             -k|--skip-preinstall)
@@ -116,8 +116,12 @@ shed_parse_args () {
                 SHOULDPOSTINSTALL=false
                 continue
                 ;;
-            -I|--skip-install)
+            -N|--skip-install)
                 SHOULDINSTALL=false
+                continue
+                ;;
+            -v|--verbose)
+                SHED_VERBOSE=true
                 continue
                 ;;
             *)
@@ -158,7 +162,6 @@ shed_parse_args () {
                 SHED_BUILDMODE="$OPTVAL"
                 ;;
             -d|--device)
-                SHED_HWCONFIG="$OPTVAL"
                 SHED_DEVICE="$OPTVAL"
                 ;;
             -s|--strip)
@@ -280,16 +283,43 @@ shed_read_package_meta () {
 
 shed_resolve_dependencies () {
     local -n DEPS=$1
-    local DEPACTION=$2
-    local DEPTYPE=$3
+    local DEPTYPE=$2
+    local DEPACTION
     local DEP
+    if $SHOULDINSTALL; then
+        case "$DEPTYPE" in
+            install|build)
+                DEPACTION='install'
+            ;;
+            upgrade)
+                DEPACTION='upgrade'
+            ;;
+        esac   
+    else
+        DEPACTION='status'
+    fi
     if ! $IGNOREDEPS && [ ${#DEPS[@]} -gt 0 ]; then
         echo "Resolving $DEPTYPE dependencies for '$NAME'..."
         for DEP in "${DEPS[@]}"; do
             local DEPARGS=( "$DEPACTION" "$DEP" "${PARSEDARGS[@]}" )
-            shedmake "${DEPARGS[@]}" || return 1
+            shedmake "${DEPARGS[@]}"
+            case "$DEPACTION" in
+                install|upgrade)
+                    if [ $? -ne 0 ]; then
+                        return 1
+                    fi
+                ;;
+                status)
+                    # Ensure package is installed, if not up-to-date
+                    if [ $? -ne 0 ] && [ $? -ne 2 ]; then
+                        return 1
+                    fi
+                ;;
+            esac
         done
     fi
+    # Ensure retval is 0, as shedmake status may have returned a non-zero value
+    return 0
 }
 
 shed_download_source () {
@@ -360,15 +390,16 @@ shed_cleanup () {
     if [ -z "$NEWVERSION" ]; then
         # Delete all files from old version if no new version replaces it
         PATHSTODELETE="$(<${OLDVERSION}.bom)"
+        echo "Shedmake will uninstall '$NAME'..."
     elif [ ! -e ${NEWVERSION}.bom ]; then
         echo "Unable to retrieve install log for current version '$NEWVERSION'"
         return 1
     else
         PATHSTODELETE="$(comm -13 ${NEWVERSION}.bom ${OLDVERSION}.bom)"
+        echo "Shedmake will delete files orphaned when '$NAME' was upgraded from $OLDVERSION to $NEWVERSION..."
     fi
     local OLDPATH
     local PATHTYPE
-    echo "Shedmake will delete files orphaned when '$NAME' was upgraded from $OLDVERSION to $NEWVERSION..."
     for PATHTYPE in files directories
     do
         while read -ra OLDPATH
@@ -390,6 +421,11 @@ shed_cleanup () {
             fi
         done <<< "$PATHSTODELETE"
     done
+    if [ -z "$NEWVERSION" ]; then
+        # Delete the install log dir if uninstalling
+        cd ..
+        rm -rf "$SHED_LOGDIR"
+    fi
 }
 
 shed_run_chroot_script () {
@@ -398,7 +434,6 @@ shed_run_chroot_script () {
     TERM="$TERM"                \
     PS1='\u:\w\$ '              \
     PATH=/bin:/usr/bin:/sbin:/usr/sbin \
-    SHED_HWCONFIG="$SHED_HWCONFIG" \
     SHED_DEVICE="$SHED_DEVICE" \
     SHED_PKGDIR="$2" \
     SHED_CONTRIBDIR="${2}/contrib" \
@@ -452,6 +487,11 @@ shed_add_repo () {
     local REPOBRANCH="$2"
     local REPOFILE="$(basename $REPOURL)"
     local REPONAME="$(basename $REPOFILE .git)"
+    if [ -n "$3" ]; then
+        REPONAME="$3"
+    else
+        REPONAME="$(basename $REPOFILE .git)"
+    fi
     cd "$REPODIR"
     local REPOS=( "${REMOTEREPOS[@]}" "${LOCALREPOS[@]}" )
     local REPO
@@ -797,7 +837,7 @@ shed_upgrade () {
     shed_package_status
     if [ $? -eq 2 ]; then
         FORCEACTION=true
-        shed_resolve_dependencies INSTALLDEPS 'upgrade' 'install' && \
+        shed_resolve_dependencies INSTALLDEPS 'upgrade' && \
         shed_install
     fi
 }
@@ -841,17 +881,24 @@ shed_command () {
     case "$SHEDCMD" in
         add|add-list|add-repo|add-repo-list)
             local TRACK="$SHED_RELEASE"
-            if [ $# -lt 1 ]; then
-                shed_print_args_error "$SHEDCMD" "<repo_url> <repo_branch>"
-                return 1
-            elif [ $# -gt 1 ]; then
-                TRACK="$2"
-            fi
+            local LOCALNAME=""
             shed_load_defaults || exit 1
             if [ "$SHEDCMD" == 'add' ] || [ "$SHEDCMD" == 'add-list' ]; then
+                if [ $# -lt 1 ]; then
+                    shed_print_args_error "$SHEDCMD" "repo_url <repo_branch>"
+                    return 1
+                elif [ $# -gt 1 ]; then
+                    TRACK="$2"
+                fi
                 shed_add "$1" "$TRACK"
             else
-                shed_add_repo "$1" "$TRACK"
+                if [ $# -lt 1 ]; then
+                    shed_print_args_error "$SHEDCMD" "repo_url <local_name>"
+                    return 1
+                elif [ $# -gt 1 ]; then
+                    LOCALNAME="$2"
+                fi
+                shed_add_repo "$1" "$TRACK" "$LOCALNAME"
             fi
             ;;
         build|build-list)
@@ -859,7 +906,7 @@ shed_command () {
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" && \
-            shed_resolve_dependencies BUILDDEPS 'install' 'build' && \
+            shed_resolve_dependencies BUILDDEPS 'build' && \
             shed_build
             ;;
         clean|clean-list)
@@ -907,7 +954,7 @@ shed_command () {
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" && \
-            shed_resolve_dependencies INSTALLDEPS 'install' 'install' && \
+            shed_resolve_dependencies INSTALLDEPS 'install' && \
             shed_install
             ;;
         status)
