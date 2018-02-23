@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.8.3
+SHEDMAKEVER=0.8.4
 CFGFILE=/etc/shedmake.conf
 
 shed_parse_yes_no () {
@@ -64,7 +64,7 @@ export SHED_NATIVE_TARGET="$(sed -n 's/^NATIVE_TARGET=//p' $CFGFILE)"
 export SHED_TOOLCHAIN_TARGET="$(sed -n 's/^TOOLCHAIN_TARGET=//p' $CFGFILE)"
 DEFAULT_KEEPSOURCE=$(shed_parse_yes_no "$(sed -n 's/^KEEPSRC=//p' $CFGFILE)")
 DEFAULT_KEEPBINARY=$(shed_parse_yes_no "$(sed -n 's/^KEEPBIN=//p' $CFGFILE)")
-                                                                            
+
 shed_load_defaults () {
     FORCEACTION=false
     KEEPSOURCE="$DEFAULT_KEEPSOURCE"
@@ -133,9 +133,9 @@ shed_parse_args () {
                     echo "Missing argument to option: '$OPTION'"
                     return 1
                 fi
-                ;;    
+                ;;
         esac
-        
+
         case "$OPTION" in
             -a|--archive-compression)
                 shed_set_binary_archive_compression "$OPTVAL" || return 1
@@ -180,7 +180,7 @@ shed_parse_args () {
                 echo "Unknown option: '$OPTION'"
                 return 1
                 ;;
-        esac    
+        esac
     done
 }
 
@@ -224,13 +224,13 @@ shed_read_package_meta () {
     if [ -z "$SHED_PKGDIR" ]; then
         echo "$1 is not a package directory"
         return 1
-    fi                    
-    
+    fi
+
     if [[ $SHED_PKGDIR =~ ^$REPODIR.* ]]; then
         # Actions on packages in managed repositories require root privileges
         REQUIREROOT=true
     fi
-    
+
     SRCCACHEDIR="${SHED_PKGDIR}/source"
     BINCACHEDIR="${SHED_PKGDIR}/binary"
     PKGMETAFILE="${SHED_PKGDIR}/package.txt"
@@ -286,7 +286,7 @@ shed_resolve_dependencies () {
     local DEPTYPE=$2
     local DEPACTION
     local DEP
-    if $SHOULDINSTALL; then
+    if $SHOULDINSTALLDEPS; then
         case "$DEPTYPE" in
             install|build)
                 DEPACTION='install'
@@ -294,11 +294,11 @@ shed_resolve_dependencies () {
             upgrade)
                 DEPACTION='upgrade'
             ;;
-        esac   
+        esac
     else
         DEPACTION='status'
     fi
-    if ! $IGNOREDEPS && [ ${#DEPS[@]} -gt 0 ]; then
+    if ! $SHOULDIGNOREDEPS && [ ${#DEPS[@]} -gt 0 ]; then
         echo "Resolving $DEPTYPE dependencies for '$NAME'..."
         for DEP in "${DEPS[@]}"; do
             local DEPARGS=( "$DEPACTION" "$DEP" "${PARSEDARGS[@]}" )
@@ -417,7 +417,7 @@ shed_cleanup () {
                             rmdir -v "$INSTALLEDPATH"
                         fi
                         ;;
-                esac      
+                esac
             fi
         done <<< "$PATHSTODELETE"
     done
@@ -554,7 +554,6 @@ shed_build () {
         echo "Root privileges are required to build this package."
         return 1
     fi
-    echo "Shedmake will build '$NAME' (${VERSION}-${REVISION})..."
 
     # Working directory management
     WORKDIR="${TMPDIR%/}/${NAME}"
@@ -576,7 +575,7 @@ shed_build () {
                 cp "${SRCCACHEDIR}/${SRCFILE}" "$WORKDIR"
         fi
     fi
-    
+
     # Determine Source Root Dir
     cd "$WORKDIR"
     SRCDIR=$(ls -d */)
@@ -596,21 +595,21 @@ shed_build () {
     if [ -a "${SHED_PKGDIR}/build.sh" ]; then
         bash "${SHED_PKGDIR}/build.sh"
     else
-        echo "Missing build script for $NAME $VERSION-$REVISION"
+        echo "Missing build script for '$NAME' ($SHED_VERSION_TUPLE)"
         return 1
     fi
 
     if [ $? -ne 0 ]; then
-        echo "Failed to build $NAME $VERSION-$REVISION"
+        echo "Failed to build '$NAME' ($SHED_VERSION_TUPLE)"
         rm -rf "$WORKDIR"
         return 1
     fi
-    echo "Successfully built $NAME $VERSION-$REVISION"
-    
+    echo "Successfully built '$NAME' ($SHED_VERSION_TUPLE)"
+
     if [ ! -d "$BINCACHEDIR" ]; then
         mkdir "$BINCACHEDIR"
     fi
-    
+
     # Strip Binaries
     if $SHOULDSTRIP ; then
         echo -n 'Stripping binaries...'
@@ -622,7 +621,7 @@ shed_build () {
     echo -n "Creating binary archive $(shed_binary_archive_name)..."
     tar -caf "${BINCACHEDIR}/$(shed_binary_archive_name)" -C "$SHED_FAKEROOT" . || return 1
     echo 'done'
-    
+
     # Delete Source
     cd "$TMPDIR"
     rm -rf "$WORKDIR"
@@ -647,14 +646,13 @@ shed_install () {
         return 0
     fi
 
-    echo "Shedmake will install '$NAME' (${VERSION}-${REVISION}) to ${SHED_INSTALLROOT}..."
-
+    # Prepare log directory
     SHED_CHROOT_PKGDIR=$(echo "$SHED_PKGDIR" | sed 's|'${SHED_INSTALLROOT%/}'/|/|')
     if [ ! -d "${SHED_LOGDIR}" ]; then
         mkdir "${SHED_LOGDIR}"
     fi
-    
-    # Pre-Installation
+
+    # Pre-installation
     if [ -a "${SHED_PKGDIR}/preinstall.sh" ]; then
         if $SHOULDPREINSTALL; then
             if [ "$SHED_INSTALLROOT" == '/' ]; then
@@ -666,7 +664,7 @@ shed_install () {
             echo "Skipping the pre-install phase."
         fi
     fi
-    
+
     # Installation
     if $SHOULDINSTALL; then
         if [ -a "${SHED_PKGDIR}/install.sh" ]; then
@@ -703,7 +701,7 @@ shed_install () {
         echo "Skipping the install phase."
     fi
 
-    # Post-Installation
+    # Post-installation
     if [ -a "${SHED_PKGDIR}/postinstall.sh" ]; then
         if $SHOULDPOSTINSTALL; then
             echo "Running post-install script for $NAME $VERSION-$REVISION..."
@@ -730,7 +728,7 @@ shed_install () {
         shed_cleanup "$SHED_VERSION_TUPLE" "$SHED_INSTALLED_VERSION_TUPLE"
     fi
 
-    echo "Successfully installed '$NAME' (${VERSION}-${REVISION})"
+    echo "Successfully installed '$NAME' ($SHED_VERSION_TUPLE)"
 }
 
 shed_string_in_array () {
@@ -752,7 +750,7 @@ shed_update_repos () {
     if [[ $EUID -ne 0 ]]; then
         echo "Root privileges are required to update managed repositories."
         return 1
-    fi               
+    fi
     for REPO in "${REPOS[@]}"; do
         if shed_string_in_array REMOTEREPOS $REPO; then
             TYPE='remote'
@@ -771,10 +769,9 @@ shed_update_repos () {
         echo "Updating $TYPE repository '$REPO'..."
         if [ "$TYPE" = 'local' ]; then
             git submodule update --remote
-            # This cannot be enabled until git is configured for the root user
-            # git commit -a -m "Updating to the latest package revisions"
         elif [ "$TYPE" = 'remote' ]; then
             git pull
+            git submodule init
             git submodule update
         fi
     done
@@ -816,15 +813,15 @@ shed_clean_repos () {
 shed_package_status () {
     # NOTE: Reserve retval 1 for packages not found in managed repositories
     if [ -n "$SHED_INSTALLED_VERSION_TUPLE" ]; then
-        if [ "${VERSION}-${REVISION}" == "$SHED_INSTALLED_VERSION_TUPLE" ]; then
+        if [ "$SHED_VERSION_TUPLE" == "$SHED_INSTALLED_VERSION_TUPLE" ]; then
             echo "Package '$NAME' is installed and up-to-date ($SHED_INSTALLED_VERSION_TUPLE)"
             return 0
-        else  
-            echo "Package '$NAME' ($SHED_INSTALLED_VERSION_TUPLE) is installed but ${VERSION}-${REVISION} is available"
+        else
+            echo "Package '$NAME' ($SHED_INSTALLED_VERSION_TUPLE) is installed but $SHED_VERSION_TUPLE is available"
             return 2
         fi
     else
-        echo "Package '$NAME' (${VERSION}-${REVISION}) is present but not installed"
+        echo "Package '$NAME' ($SHED_VERSION_TUPLE) is available but not installed"
         return 3
     fi
 }
@@ -906,6 +903,7 @@ shed_command () {
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" && \
+            echo "Shedmake is preparing to build '$NAME' ($SHED_VERSION_TUPLE)..." && \
             shed_resolve_dependencies BUILDDEPS 'build' && \
             shed_build
             ;;
@@ -954,6 +952,7 @@ shed_command () {
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" && \
+            echo "Shedmake is preparing to install '$NAME' ($SHED_VERSION_TUPLE) to ${SHED_INSTALLROOT}..." && \
             shed_resolve_dependencies INSTALLDEPS 'install' && \
             shed_install
             ;;
