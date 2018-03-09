@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.9.0
+SHEDMAKEVER=0.9.1
 CFGFILE=/etc/shedmake.conf
 LOCALREPODIR=/var/shedmake/repos/local
 REMOTEREPODIR=/var/shedmake/repos/remote
@@ -1055,8 +1055,8 @@ shed_command () {
             shed_clean_all
             ;;
         cleanup|cleanup-list|uninstall|uninstall-list)
-            if [ $# -ne 1 ]; then
-                shed_print_args_error "$SHEDCMD" '<package_name>'
+            if [ $# -lt 1 ]; then
+                shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
             shed_load_defaults && \
@@ -1096,12 +1096,14 @@ shed_command () {
             esac
             ;;
         fetch-source|fetch-source-list)
-            if [ $# -ne 1 ]; then
-                shed_print_args_error "$SHEDCMD" '<package_name>'
+            if [ $# -lt 1 ]; then
+                shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
             shed_load_defaults && \
             shed_read_package_meta "$1" && \
+            shift && \
+            shed_parse_args "$@" && \
             shed_fetch_source
             ;;
         install|install-list)
