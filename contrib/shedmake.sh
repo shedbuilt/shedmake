@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.9.2
+SHEDMAKEVER=0.9.3
 CFGFILE=/etc/shedmake.conf
 
 shed_string_in_array () {
@@ -1031,7 +1031,7 @@ shed_create () {
     local NEWPKGNAME=$(basename "$1")
     echo -n "Shedmake is creating a new package directory for '$NEWPKGNAME'..."
     if $VERBOSE; then echo; fi
-    mkdir -v "$1" && \
+    mkdir -v "$1" 1>&3 2>&4 && \
     cd "$1" || return 1
     if [ -n "$REPOURL" ]; then
         git init 1>&3 2>&4 && \
