@@ -1,8 +1,10 @@
-KEEPSRC=no
-KEEPBIN=no
-NUMJOBS=4
+KEEP_SRC=no
+KEEP_BIN=no
+NUM_JOBS=4
 COMPRESSION=xz
-TMPDIR=/var/tmp/shedmake
+TMP_DIR=/var/tmp/shedmake
+REMOTE_REPO_DIR=/var/shedmake/repos/remote
+LOCAL_REPO_DIR=/var/shedmake/repos/local
 RELEASE=amano
 DEVICE=orangepi-pc
 CPU_CORE=cortex-a7

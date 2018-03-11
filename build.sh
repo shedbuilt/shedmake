@@ -10,5 +10,7 @@ else
     install -v -m644 "${SHED_CONTRIBDIR}/template/package.txt" "${SHED_FAKEROOT}/var/shedmake/template/package.txt"
     install -v -m755 "${SHED_CONTRIBDIR}/template/build.sh" "${SHED_FAKEROOT}/var/shedmake/template/build.sh"
     install -v -m644 "${SHED_CONTRIBDIR}/template/LICENSE" "${SHED_FAKEROOT}/var/shedmake/template/LICENSE"
-    install -v -m644 "${SHED_CONTRIBDIR}/shedmake.conf.${SHED_DEVICE}" "${SHED_FAKEROOT}/etc/shedmake.conf.default"
+    install -v -Dm644 "${SHED_CONTRIBDIR}/shedmake.conf.${SHED_DEVICE}" "${SHED_FAKEROOT}/etc/shedmake.conf.default"
+    chgrp -v -R shedmake "${SHED_FAKEROOT}/var/shedmake"
+    chmod -v -R g+s "${SHED_FAKEROOT}/var/shedmake"
 fi

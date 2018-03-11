@@ -19,11 +19,8 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.9.1
+SHEDMAKEVER=0.9.2
 CFGFILE=/etc/shedmake.conf
-LOCALREPODIR=/var/shedmake/repos/local
-REMOTEREPODIR=/var/shedmake/repos/remote
-TEMPLATEDIR=/var/shedmake/template
 
 shed_string_in_array () {
     local -n HAYSTACK=$1
@@ -90,17 +87,21 @@ if [ ! -r "$CFGFILE" ]; then
     echo "Unable to read from config file: '$CFGFILE'"
     exit 1
 fi
-DEFAULT_NUMJOBS="$(sed -n 's/^NUMJOBS=//p' $CFGFILE)"
-DEFAULT_DEVICE="$(sed -n 's/^DEVICE=//p' $CFGFILE)"
-TMPDIR="$(sed -n 's/^TMPDIR=//p' $CFGFILE)"
+
+TMPDIR="$(sed -n 's/^TMP_DIR=//p' $CFGFILE)"
+LOCALREPODIR="$(sed -n 's/^LOCAL_REPO_DIR=//p' $CFGFILE)"
+REMOTEREPODIR="$(sed -n 's/^REMOTE_REPO_DIR=//p' $CFGFILE)"
+TEMPLATEDIR="$(sed -n 's/^TEMPLATE_DIR=//p' $CFGFILE)"
+DEFAULT_KEEPSOURCE=$(shed_parse_yes_no "$(sed -n 's/^KEEP_SRC=//p' $CFGFILE)")
+DEFAULT_KEEPBINARY=$(shed_parse_yes_no "$(sed -n 's/^KEEP_BIN=//p' $CFGFILE)")
 DEFAULT_COMPRESSION="$(sed -n 's/^COMPRESSION=//p' $CFGFILE)"
+DEFAULT_NUMJOBS="$(sed -n 's/^NUM_JOBS=//p' $CFGFILE)"
+DEFAULT_DEVICE="$(sed -n 's/^DEVICE=//p' $CFGFILE)"
 export SHED_RELEASE="$(sed -n 's/^RELEASE=//p' $CFGFILE)"
 export SHED_CPU_CORE="$(sed -n 's/^CPU_CORE=//p' $CFGFILE)"
 export SHED_CPU_FEATURES="$(sed -n 's/^CPU_FEATURES=//p' $CFGFILE)"
 export SHED_NATIVE_TARGET="$(sed -n 's/^NATIVE_TARGET=//p' $CFGFILE)"
 export SHED_TOOLCHAIN_TARGET="$(sed -n 's/^TOOLCHAIN_TARGET=//p' $CFGFILE)"
-DEFAULT_KEEPSOURCE=$(shed_parse_yes_no "$(sed -n 's/^KEEPSRC=//p' $CFGFILE)")
-DEFAULT_KEEPBINARY=$(shed_parse_yes_no "$(sed -n 's/^KEEPBIN=//p' $CFGFILE)")
 
 shed_load_defaults () {
     VERBOSE=false
@@ -112,7 +113,7 @@ shed_load_defaults () {
     SHOULDPREINSTALL=true
     SHOULDINSTALL=true
     SHOULDPOSTINSTALL=true
-    SHOULDCLEANUP=false
+    SHOULDPURGE=false
     SHOULDSTRIP=true
     REQUIREROOT=false
     export SHED_BUILDMODE=release
@@ -183,13 +184,6 @@ shed_parse_args () {
             -b|--branch)
                 REPOBRANCH="$OPTVAL"
                 ;;
-            -c|--cleanup)
-                SHOULDCLEANUP=$(shed_parse_yes_no "$OPTVAL")
-                if [ $? -ne 0 ]; then
-                    echo "Invalid argument for '$OPTION' Please specify 'yes' or 'no'"
-                    return 1
-                fi
-                ;;
             -d|--device)
                 SHED_DEVICE="$OPTVAL"
                 ;;
@@ -201,6 +195,13 @@ shed_parse_args () {
                 ;;
             -o|--origin)
                 REPOURL="$OPTVAL"
+                ;;
+            -p|--purge)
+                SHOULDPURGE=$(shed_parse_yes_no "$OPTVAL")
+                if [ $? -ne 0 ]; then
+                    echo "Invalid argument for '$OPTION' Please specify 'yes' or 'no'"
+                    return 1
+                fi
                 ;;
             -r|--install-root)
                 SHED_INSTALLROOT="$OPTVAL"
@@ -318,14 +319,15 @@ shed_read_package_meta () {
     if [ "$(sed -n 's/^STRIP=//p' ${PKGMETAFILE})" = 'no' ]; then
         SHOULDSTRIP=false
     fi
-    if [ "$(sed -n 's/^CLEANUP=//p' ${PKGMETAFILE})" = 'yes' ]; then
-        SHOULDCLEANUP=true
+    if [ "$(sed -n 's/^PURGE=//p' ${PKGMETAFILE})" = 'yes' ]; then
+        SHOULDPURGE=true
     fi
     BIN=$(sed -n 's/^BIN=//p' ${PKGMETAFILE})
     BINFILE=$(sed -n 's/^BINFILE=//p' ${PKGMETAFILE})
     if [ -z "$BINFILE" ] && [ -n "$BIN" ]; then
         BINFILE=$(basename $BIN)
     fi
+    read -ra LICENSE <<< $(sed -n 's/^LICENSE=//p' ${PKGMETAFILE})
     read -ra BUILDDEPS <<< $(sed -n 's/^BUILDDEPS=//p' ${PKGMETAFILE})
     read -ra INSTALLDEPS <<< $(sed -n 's/^INSTALLDEPS=//p' ${PKGMETAFILE})
     read -ra RUNDEPS <<< $(sed -n 's/^RUNDEPS=//p' ${PKGMETAFILE})
@@ -335,17 +337,70 @@ shed_read_package_meta () {
         SHED_INSTALLED_VERSION_TUPLE=$(tail -n 1 "$SHED_INSTALL_HISTORY")
     fi
     if [ -z "$NAME" ] || [ -z "$VERSION" ] || [ -z "$REVISION" ]; then
-        echo "Required fields missing from package metadata."
+        echo 'Required fields missing from package metadata.'
         return 1
+    fi
+}
+
+shed_package_info () {
+    echo "Shedmake information for package located at $SHED_PKGDIR..."
+    echo "Name:			$NAME"
+    echo "Version:		$VERSION"
+    echo "Package Revision:	$REVISION"
+    echo "Source File URL:	$SRC"
+    echo "Source File Name:	$SRCFILE"
+    if [ -n "$SRCMD5" ]; then
+        echo "Source File MD5SUM:	$SRCMD5"
+    fi
+    if [ -n "$REPOREF" ]; then
+        echo "Source Git Refspec:	$REPOREF"
+    fi
+    if [ -n "$BIN" ]; then
+        echo "Binary Archive URL (Raw):	$BIN"
+        local BINURL=$(eval echo "$BIN")
+        echo "Binary Archive URL:	$BINURL"
+    fi
+    echo "Binary Archive Name:	$(shed_binary_archive_name)"
+    if [ -n "$LICENSE" ]; then
+        echo "License(s):		${LICENSE[@]}"
+    fi
+    if [ -n "$BUILDDEPS" ]; then
+        echo "Build Dependencies:	${BUILDDEPS[@]}"
+    fi
+    if [ -n "$INSTALLDEPS" ]; then
+        echo "Install Dependencies:	${INSTALLDEPS[@]}"
+    fi
+    if [ -n "$RUNDEPS" ]; then
+        echo "Runtime Dependencies:	${RUNDEPS[@]}"
+    fi
+    if [ -n "$SHED_INSTALLED_VERSION_TUPLE" ]; then
+        echo "Installed Version:	$SHED_INSTALLED_VERSION_TUPLE"
+    else
+        echo "Installed Version:	Not Installed"
+    fi
+    if $VERBOSE; then
+        if [ -d "$SHED_PATCHDIR" ]; then
+            echo -n "Patches: "
+            ls "$SHED_PATCHDIR"
+        fi
+        if [ -d "$SHED_CONTRIBDIR" ]; then
+            echo -n "Contrib Files: "
+            ls "$SHED_CONTRIBDIR"
+        fi
+        if [ -d "$SHED_LOGDIR" ]; then
+            echo -n "Install Logs: "
+            ls "$SHED_LOGDIR"
+        fi
     fi
 }
 
 shed_resolve_dependencies () {
     local -n DEPS=$1
     local DEPTYPE=$2
-    local DEPACTION
+    local DEPACTION='status'
     local DEP
     local STATUSRETVAL
+    local DEPRETVAL=0
     if $SHOULDINSTALLDEPS; then
         case "$DEPTYPE" in
             install|build)
@@ -355,21 +410,34 @@ shed_resolve_dependencies () {
                 DEPACTION='upgrade'
             ;;
         esac
-    else
-        DEPACTION='status'
     fi
     if ! $SHOULDIGNOREDEPS && [ ${#DEPS[@]} -gt 0 ]; then
         echo "Resolving $DEPTYPE dependencies for '$NAME'..."
         for DEP in "${DEPS[@]}"; do
             if [ "$DEP" == "$DEPENDENCY_OF" ]; then
-                if $VERBOSE; then
-                    echo "Ignoring circular dependency '$DEP'."
-                fi
-                continue
+                DEPACTION='status'
             fi
             case "$DEPACTION" in
                 install|upgrade)
-                    local DEPARGS=( "$DEPACTION" "$DEP" "${PARSEDARGS[@]}" "--dependency-of" "$NAME" )
+                    local IGNOREARG=false
+                    local DEPARGS=( "$DEPACTION" "$DEP" "--dependency-of" "$NAME" )
+                    for PARSEDARG in "${PARSEDARGS[@]}"; do
+                        if $IGNOREARG; then
+                            IGNOREARG=false
+                            continue
+                        fi
+                        case "$PARSEDARG" in
+                            -D|--dependency-of)
+                                IGNOREARG=true
+                                ;&
+                            -f|--force)
+                                continue
+                                ;;
+                            *)
+                                DEPARGS+=( "$PARSEDARG" )
+                                ;;
+                        esac
+                    done
                     shedmake "${DEPARGS[@]}" || return 1
                 ;;
                 status)
@@ -377,67 +445,45 @@ shed_resolve_dependencies () {
                     shedmake status "$DEP"
                     STATUSRETVAL=$?
                     if [ $STATUSRETVAL -ne 0 ] && [ $STATUSRETVAL -ne 2 ]; then
-                        return 1
+                        DEPRETVAL=1
+                        if [ "$DEP" == "$DEPENDENCY_OF" ]; then
+                            echo "Unmet circular dependency on '$DEP' in '$NAME'"
+                            if $VERBOSE; then
+                                echo "Try installing '$DEP' without this dependency, compiling '$NAME' and re-compiling '$DEP' afterwards."
+                            fi
+                        fi
                     fi
                 ;;
             esac
         done
     fi
-    # Ensure retval is 0, as shedmake status may have returned a non-zero value
-    return 0
-}
-
-shed_download_source () {
-    if [ ! -d "$SRCCACHEDIR" ]; then
-        mkdir "$SRCCACHEDIR"
+    if [ $DEPRETVAL -ne 0 ]; then
+        echo "Action aborted due to unmet $DEPTYPE dependencies."
     fi
-    cd "$SRCCACHEDIR"
-    wget -O "$SRCFILE" "$SRC" $(shed_wget_verbosity)
-}
-
-shed_download_binary () {
-    if [ ! -d "$BINCACHEDIR" ]; then
-        mkdir "$BINCACHEDIR"
-    fi
-    cd "$BINCACHEDIR"
-    local BINURL=$(eval echo "$BIN")
-    wget -O "$(shed_binary_archive_name)" "$BINURL" $(shed_wget_verbosity)
-}
-
-shed_verify_source () {
-    if [ -n "$SRCMD5" ]; then
-        if [ "$(md5sum ${SRCCACHEDIR}/${SRCFILE} | awk '{print $1}')" != "$SRCMD5" ]; then
-            return 1
-        fi
-    elif $VERBOSE; then
-        echo 'WARNING: Skipping verification of source archive because SRCMD5 is absent from package metadata'
-    fi
+    return $DEPRETVAL
 }
 
 shed_strip_binaries () {
     local STRIPFOLDER
     # Strip all binaries and libraries, except explicitly created .dbg symbol files
     if [ -d "${SHED_FAKEROOT}/usr/lib" ]; then
-        find "${SHED_FAKEROOT}/usr/lib" -type f -name \*.a \
-            -exec strip --strip-debug {} ';'
+        find "${SHED_FAKEROOT}/usr/lib" -type f -name \*.a -exec strip --strip-debug {} ';' 1>&3 2>&4
     fi
     for STRIPFOLDER in "${SHED_FAKEROOT}"/lib "${SHED_FAKEROOT}"/usr/{,local/}lib
     do
         if [ -d "$STRIPFOLDER" ]; then
-            find "$STRIPFOLDER" -type f \( -name \*.so* -a ! -name \*dbg \) \
-                -exec strip --strip-unneeded {} ';'
+            find "$STRIPFOLDER" -type f \( -name \*.so* -a ! -name \*dbg \) -exec strip --strip-unneeded {} ';' 1>&3 2>&4
         fi
     done
     for STRIPFOLDER in "${SHED_FAKEROOT}"/{bin,sbin} "${SHED_FAKEROOT}"/usr/{,local/}{bin,sbin,libexec}
     do
         if [ -d "$STRIPFOLDER" ]; then
-            find "$STRIPFOLDER" -type f \
-                -exec strip --strip-all {} ';'
+            find "$STRIPFOLDER" -type f -exec strip --strip-all {} ';' 1>&3 2>&4
         fi
     done
 }
 
-shed_cleanup () {
+shed_purge () {
     local NEWVERSION="$1"
     local OLDVERSION="$2"
     local PATHSTODELETE=''
@@ -570,35 +616,71 @@ shed_add_repo () {
     echo "Successfully added remote repository '$REPONAME'"
 }
 
+# Function: shed_download_file
+# Description: Downloads a file from a URL to a specified directory
+# Arguments:
+#     $1 - URL of file to download
+#     $2 - Filename to use for download
+#     $3 - Directory in which to place the download
+shed_download_file () {
+    if [ ! -d "$3" ]; then
+        mkdir "$3"
+    fi
+    cd "$3"
+    wget -O "$2" "$1" $(shed_wget_verbosity)
+}
+
+# Function: shed_verify_file
+# Description: Verifies a given file using an md5sum
+# Arguments:
+#     $1 - Path to file to verify
+#     $2 - (Optional) md5sum against which the file will be tested
+shed_verify_file () {
+    if [ -n "$2" ]; then
+        if [[ $(md5sum "$1" | awk '{print $1}') != $2 ]]; then
+            return 1
+        fi
+    elif $VERBOSE; then
+        echo 'WARNING: Skipping verification of file because no MD5 was provided.'
+    fi
+}
+
 shed_fetch_source () {
    if [ -n "$SRC" ]; then
         if [ "${SRC: -4}" = '.git' ]; then
             # Source is a git repository
-            if [ ! -d "${SRCCACHEDIR}/${NAME}-git" ]; then
-                mkdir -p "${SRCCACHEDIR}/${NAME}-git"
-                cd "${SRCCACHEDIR}/${NAME}-git"
-                git init 1>&3 2>&4 && \
-                git remote add origin "$SRC" 1>&3 2>&4 || return 1
+            if [ ! -d "${1}/${NAME}-git" ]; then
+                if [ -d "${SRCCACHEDIR}/${NAME}-git" ]; then
+                    cp -R "${SRCCACHEDIR}/${NAME}-git" "$1"
+                else
+                    mkdir -p "${1}/${NAME}-git"
+                    cd "${1}/${NAME}-git"
+                    git init 1>&3 2>&4 && \
+                    git remote add origin "$SRC" 1>&3 2>&4 || return 1
+                fi
             else
-                cd "${SRCCACHEDIR}/${NAME}-git"
+                cd "${1}/${NAME}-git"
             fi
             # Perform a shallow fetch of the desired refspec
             local LOCALREPOREF="$(sed -e "s/^refs\/heads\//refs\/remotes\/origin\//g" <<< $REPOREF)"
             git fetch --depth=1 origin +${REPOREF}:${LOCALREPOREF} 1>&3 2>&4 && \
             git checkout --quiet FETCH_HEAD 1>&3 2>&4 || return 1
+
             # TODO: Use signature for verification
         else 
             # Source is an archive
-            if [ ! -r ${SRCCACHEDIR}/${SRCFILE} ]; then
-                shed_download_source
+            if [ ! -r "${SRCCACHEDIR}/${SRCFILE}" ]; then
+                shed_download_file "$SRC" "$SRCFILE" "$1"
                 if [ $? -ne 0 ]; then
-                    echo "Unable to download source archive ${SRCFILE}"
+                    echo "Unable to download source archive $SRCFILE"
                     return 1
                 fi
+            else
+                cp "${SRCCACHEDIR}/${SRCFILE}" "$1"
             fi
 
             # Verify Source Archive MD5
-            shed_verify_source
+            shed_verify_file "${1}/${SRCFILE}" "$SRCMD5"
             if [ $? -ne 0 ]; then
                 echo "Source archive ${SRCFILE} does not match expected checksum"
                 return 1
@@ -620,22 +702,28 @@ shed_build () {
     export SHED_FAKEROOT="${WORKDIR}/fakeroot"
 
     # Source acquisition and unpacking
-    shed_fetch_source || return 1
+    shed_fetch_source "$WORKDIR" || return 1
+    if $KEEPSOURCE && [ ! -d "$SRCCACHEDIR" ]; then
+        mkdir "$SRCCACHEDIR"
+    fi
+    cd "$WORKDIR"
     if [ -n "$SRC" ]; then
         if [ "${SRC: -4}" = '.git' ]; then
             # Source is a git repository
-            # Copy repository files to build directory 
-            cp -R "${SRCCACHEDIR}/${NAME}-git" "$WORKDIR" 
+            if $KEEPSOURCE; then
+                cp -R "${NAME}-git" "$SRCCACHEDIR"
+            fi
         else 
             # Source is an archive or other file
+            if $KEEPSOURCE; then
+                cp "$SRCFILE" "$SRCCACHEDIR"
+            fi
             # Unarchive Source
-            tar xf "${SRCCACHEDIR}/${SRCFILE}" -C "$WORKDIR" || \
-                cp "${SRCCACHEDIR}/${SRCFILE}" "$WORKDIR"
+            tar xf "$SRCFILE"
         fi
     fi
 
-    # Determine Source Root Dir
-    cd "$WORKDIR"
+    # Determine Source Root Dir    
     SRCDIR=$(ls -d */)
     if [ $? -eq 0 ]; then
         if [ -d "$SRCDIR" ]; then
@@ -673,9 +761,15 @@ shed_build () {
 
     # Strip Binaries
     if $SHOULDSTRIP ; then
-        echo -n 'Stripping binaries...'
+        if ! $VERBOSE; then
+            echo -n 'Stripping binaries...'
+        else
+            echo 'Stripping binaries...'
+        fi
         shed_strip_binaries
-        echo 'done'
+        if ! $VERBOSE; then
+            echo 'done'
+        fi
     fi
 
     # Archive Build Product
@@ -686,16 +780,9 @@ shed_build () {
     tar -caf "${BINCACHEDIR}/$(shed_binary_archive_name)" -C "$SHED_FAKEROOT" . || return 1
     echo 'done'
 
-    # Delete Source
+    # Delete Temporary Files
     cd "$TMPDIR"
     rm -rf "$WORKDIR"
-    if ! $KEEPSOURCE && [ -n "$SRC" ]; then
-        if [ "${SRC: -4}" = '.git' ]; then
-            rm -rf "${SRCCACHEDIR}/${NAME}-git"
-        else
-            rm "${SRCCACHEDIR}/${SRCFILE}"
-        fi
-    fi
 }
 
 shed_install () {
@@ -713,11 +800,14 @@ shed_install () {
     # Pre-installation
     if [ -a "${SHED_PKGDIR}/preinstall.sh" ]; then
         if $SHOULDPREINSTALL; then
+            echo -n "Running pre-install script for '$NAME' ($SHED_VERSION_TUPLE)..."
+            if $VERBOSE; then echo; fi
             if [ "$SHED_INSTALLROOT" == '/' ]; then
                 shed_run_script "${SHED_PKGDIR}/preinstall.sh" || return 1
             else
                 shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" preinstall.sh || return 1
             fi
+            if ! $VERBOSE; then echo 'done'; fi
         else
             echo "Skipping the pre-install phase."
         fi
@@ -726,17 +816,21 @@ shed_install () {
     # Installation
     if $SHOULDINSTALL; then
         if [ -a "${SHED_PKGDIR}/install.sh" ]; then
+            echo -n "Running install script for '$NAME' ($SHED_VERSION_TUPLE)..."
+            if $VERBOSE; then echo; fi
             if [ "$SHED_INSTALLROOT" == '/' ]; then
                 shed_run_script "${SHED_PKGDIR}/install.sh" || return 1
             else
                 shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" install.sh || return 1
             fi
+            if ! $VERBOSE; then echo 'done'; fi
         else
             BINARCHIVE="${BINCACHEDIR}/$(shed_binary_archive_name)"
             if [ ! -r "$BINARCHIVE" ]; then
                 if [ -n "$BIN" ]; then
                     # Download from the URL specified by BIN
-                    shed_download_binary
+                    local BINURL=$(eval echo "$BIN")
+                    shed_download_file "$BINURL" "$(shed_binary_archive_name)" "$BINCACHEDIR"
                 fi
                 if [ ! -r "$BINARCHIVE" ]; then
                     # Or, failing that, build it from scratch
@@ -762,12 +856,14 @@ shed_install () {
     # Post-installation
     if [ -a "${SHED_PKGDIR}/postinstall.sh" ]; then
         if $SHOULDPOSTINSTALL; then
-            echo "Running post-install script for '$NAME' ($SHED_VERSION_TUPLE)..."
+            echo -n "Running post-install script for '$NAME' ($SHED_VERSION_TUPLE)..."
+            if $VERBOSE; then echo; fi
             if [ "$SHED_INSTALLROOT" == '/' ]; then
                 shed_run_script "${SHED_PKGDIR}/postinstall.sh" || return 1
             else
                 shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" postinstall.sh || return 1
             fi
+            if ! $VERBOSE; then echo 'done'; fi
         else
             echo "Skipping the post-install phase."
         fi
@@ -781,9 +877,9 @@ shed_install () {
         echo "$SHED_VERSION_TUPLE" >> "$SHED_INSTALL_HISTORY"
     fi
 
-    # Clean Up Old Files
-    if $SHOULDCLEANUP && [ -n "$SHED_INSTALLED_VERSION_TUPLE" ]; then
-        shed_cleanup "$SHED_VERSION_TUPLE" "$SHED_INSTALLED_VERSION_TUPLE"
+    # Purge Old Files
+    if $SHOULDPURGE && [ -n "$SHED_INSTALLED_VERSION_TUPLE" ]; then
+        shed_purge "$SHED_VERSION_TUPLE" "$SHED_INSTALLED_VERSION_TUPLE"
     fi
 
     echo "Successfully installed '$NAME' ($SHED_VERSION_TUPLE)"
@@ -796,14 +892,17 @@ shed_update_repo_at_path () {
             echo 'Root privileges are required to update managed remote package repositories.'
             return 1
         fi
-        echo "Shedmake is updating the remote repository at ${1}..."   
-        git pull && \
-        git submodule init && \
-        git submodule update
+        echo -n "Shedmake will update the remote repository at ${1}..."
+        if $VERBOSE; then echo; fi
+        git pull 1>&3 2>&4 && \
+        git submodule init 1>&3 2>&4 && \
+        git submodule update 1>&3 2>&4 || return 1
     else
-        echo "Shedmake is updating the local repository at ${1}..."   
-        git submodule update --remote
+        echo -n "Shedmake will update the local repository at ${1}..."
+        if $VERBOSE; then echo; fi
+        git submodule update --remote 1>&3 2>&4 || return 1
     fi
+    if ! $VERBOSE; then echo 'done'; fi
 }
 
 shed_update_repo () {
@@ -823,17 +922,19 @@ shed_update_all () {
 }
 
 shed_clean () {
-   if $REQUIREROOT && [[ $EUID -ne 0 ]]; then
-       echo "Root privileges are required to clean this package."
-       return 1
-   fi
-   echo "Cleaning cached archives for '$NAME'..."
-   rm -rf "$SRCCACHEDIR" && \
-   rm -rf "$BINCACHEDIR"
+    if $REQUIREROOT && [[ $EUID -ne 0 ]]; then
+        echo "Root privileges are required to clean this package."
+        return 1
+    fi
+    echo -n "Cleaning up cached archives for '$NAME'..."
+    if $VERBOSE; then echo; fi
+    rm -rfv "$SRCCACHEDIR" 1>&3 2>&4 && \
+    rm -rfv "$BINCACHEDIR" 1>&3 2>&4 || return 1
+    if ! $VERBOSE; then echo 'done'; fi
 }
 
 shed_clean_repo_at_path () {
-    echo "Shedmake will clean packages in the repository at '$1'..."
+    echo "Shedmake will clean up cached archives for packages in '$1'..."
     local PACKAGE
     for PACKAGE in "${1}"/*; do
         if [ ! -d "$PACKAGE" ]; then
@@ -928,47 +1029,52 @@ shed_upgrade_all () {
 
 shed_create () {
     local NEWPKGNAME=$(basename "$1")
-    echo "Shedmake is creating a new package directory for '$NEWPKGNAME'..."
-    mkdir "$1" && \
+    echo -n "Shedmake is creating a new package directory for '$NEWPKGNAME'..."
+    if $VERBOSE; then echo; fi
+    mkdir -v "$1" && \
     cd "$1" || return 1
     if [ -n "$REPOURL" ]; then
-        git init && \
-        git remote add origin "$REPOURL" || return 1
+        git init 1>&3 2>&4 && \
+        git remote add origin "$REPOURL" 1>&3 2>&4 || return 1
     fi
     local TEMPLATEFILE
     local TEMPLATEFILENAME
     for TEMPLATEFILE in "${TEMPLATEDIR}"/{.[!.],}*
     do
-        cp "$TEMPLATEFILE" .
+        cp -v "$TEMPLATEFILE" . 1>&3 2>&4
         TEMPLATEFILENAME=$(basename "$TEMPLATEFILE")
         if [ "$TEMPLATEFILENAME" == 'package.txt' ]; then
             sed -i "s/NAME=.*/NAME=${NEWPKGNAME}/g" "$TEMPLATEFILENAME"
         fi
         if [ -n "$REPOURL" ]; then
-            git add "$TEMPLATEFILENAME" || return 1
+            git add "$TEMPLATEFILENAME" 1>&3 2>&4 || return 1
         fi
     done
+    if ! $VERBOSE; then echo 'done'; fi
 }
 
 shed_create_repo () {
-    shed_can_add_repo "$1" && \
-    mkdir -v "${LOCALREPODIR}/$1" || return 1
+    echo -n "Shedmake is creating a new local package repository '$1'..."
+    if $VERBOSE; then echo; fi
+    mkdir -v "${LOCALREPODIR}/$1" 1>&3 2>&4 || return 1
     if [ -n "$REPOURL" ]; then
         cd "${LOCALREPODIR}/$1" && \
-        git init && \
-        git remote add origin "$REPOURL"
+        git init 1>&3 2>&4 && \
+        git remote add origin "$REPOURL" 1>&3 2>&4
     fi
+    if ! $VERBOSE; then echo 'done'; fi
 }
 
 shed_push () {
-    echo "Shedmake is preparing to push the master revision of '$1' to '$REPOBRANCH'..."
-    local TAG="$2"
+    echo -n "Shedmake will push '$1' ($2) to '$REPOBRANCH'..."
+    if $VERBOSE; then echo; fi
     push -u origin master && \
     { git checkout "$REPOBRANCH" || git checkout -b "$REPOBRANCH"; } && \
     git merge master && \
     git push -u origin "$REPOBRANCH" && \
-    git tag "$TAG" && \
+    git tag "$2" && \
     git push -u origin --tags
+    if ! $VERBOSE; then echo 'done'; fi
 }
 
 shed_push_package () {
@@ -1054,7 +1160,64 @@ shed_command () {
             shed_load_defaults && \
             shed_clean_all
             ;;
-        cleanup|cleanup-list|uninstall|uninstall-list)
+        create|create-list|create-repo|create-repo-list)
+            if [ $# -lt 1 ]; then
+                shed_print_args_error "$SHEDCMD" "<new_package_name> [--origin <repo_url>]"
+                return 1
+            fi
+            local CREATENAME="$1"; shift
+            shed_load_defaults && \
+            shed_parse_args "$@" || return 1
+            case "$SHEDCMD" in
+                create|create-list)
+                    shed_create "$CREATENAME"
+                    ;;
+                create-repo|create-repo-list)
+                    shed_can_add_repo "$CREATENAME" && \
+                    shed_create_repo "$CREATENAME"
+                    ;;
+            esac
+            ;;
+        fetch-source|fetch-source-list)
+            if [ $# -lt 1 ]; then
+                shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
+                return 1
+            fi
+            shed_load_defaults && \
+            shed_read_package_meta "$1" && \
+            shift && \
+            shed_parse_args "$@" && \
+            shed_fetch_source "$SRCCACHEDIR"
+            ;;
+        info|info-list)
+            if [ $# -lt 1 ]; then
+                shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
+                return 1
+            fi
+            shed_load_defaults && \
+            shed_read_package_meta "$1" && \
+            shift && \
+            shed_parse_args "$@" && \
+            shed_package_info
+            ;;
+        install|install-list)
+            if [ $# -lt 1 ]; then
+                shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
+                return 1
+            fi
+            shed_load_defaults && \
+            shed_read_package_meta "$1" && \
+            shift && \
+            shed_parse_args "$@" || return 1
+            if [ -n "$SHED_INSTALLED_VERSION_TUPLE" ] && ! $FORCEACTION; then
+                echo "Package '$NAME' is already installed (${SHED_INSTALLED_VERSION_TUPLE})"
+                return 0
+            fi
+            echo "Shedmake is preparing to install '$NAME' ($SHED_VERSION_TUPLE) to ${SHED_INSTALLROOT}..." && \
+            shed_resolve_dependencies INSTALLDEPS 'install' && \
+            shed_install
+            ;;
+        purge|purge-list|uninstall|uninstall-list)
             if [ $# -lt 1 ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
@@ -1076,52 +1239,7 @@ shed_command () {
                 OLDVERSIONTUPLE="$SHED_INSTALLED_VERSION_TUPLE"
                 NEWVERSIONTUPLE=""
             fi
-            shed_cleanup "$NEWVERSIONTUPLE" "$OLDVERSIONTUPLE"
-            ;;
-        create|create-list|create-repo|create-repo-list)
-            if [ $# -lt 1 ]; then
-                shed_print_args_error "$SHEDCMD" "<new_package_name> [--origin <repo_url>]"
-                return 1
-            fi
-            local CREATENAME="$1"; shift
-            shed_load_defaults && \
-            shed_parse_args "$@" || return 1
-            case "$SHEDCMD" in
-                create|create-list)
-                    shed_create "$CREATENAME"
-                    ;;
-                create-repo|create-repo-list)
-                    shed_create_repo "$CREATENAME"
-                    ;;
-            esac
-            ;;
-        fetch-source|fetch-source-list)
-            if [ $# -lt 1 ]; then
-                shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
-                return 1
-            fi
-            shed_load_defaults && \
-            shed_read_package_meta "$1" && \
-            shift && \
-            shed_parse_args "$@" && \
-            shed_fetch_source
-            ;;
-        install|install-list)
-            if [ $# -lt 1 ]; then
-                shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
-                return 1
-            fi
-            shed_load_defaults && \
-            shed_read_package_meta "$1" && \
-            shift && \
-            shed_parse_args "$@" || return 1
-            if [ -n "$SHED_INSTALLED_VERSION_TUPLE" ] && ! $FORCEACTION; then
-                echo "Package '$NAME' is already installed (${SHED_INSTALLED_VERSION_TUPLE})"
-                return 0
-            fi
-            echo "Shedmake is preparing to install '$NAME' ($SHED_VERSION_TUPLE) to ${SHED_INSTALLROOT}..." && \
-            shed_resolve_dependencies INSTALLDEPS 'install' && \
-            shed_install
+            shed_purge "$NEWVERSIONTUPLE" "$OLDVERSIONTUPLE"
             ;;
         push|push-list)
             if [ $# -lt 1 ]; then
