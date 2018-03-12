@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.9.3
+SHEDMAKEVER=0.9.4
 CFGFILE=/etc/shedmake.conf
 
 shed_string_in_array () {
@@ -331,6 +331,7 @@ shed_read_package_meta () {
     read -ra BUILDDEPS <<< $(sed -n 's/^BUILDDEPS=//p' ${PKGMETAFILE})
     read -ra INSTALLDEPS <<< $(sed -n 's/^INSTALLDEPS=//p' ${PKGMETAFILE})
     read -ra RUNDEPS <<< $(sed -n 's/^RUNDEPS=//p' ${PKGMETAFILE})
+    DEFERREDDEPS=( )
     export SHED_INSTALL_HISTORY="${SHED_LOGDIR}/install.log"
     export SHED_INSTALLED_VERSION_TUPLE=''
     if [ -e "$SHED_INSTALL_HISTORY" ]; then
@@ -394,27 +395,44 @@ shed_package_info () {
     fi
 }
 
+# Returns:
+#     0 - All dependencies successfully resolved
+#   1-9 - File location or format error
+# 10-19 - Package status error
+# 20-29 - Package build error
+# 30-39 - Package install error
+#    40 - Unmet circular dependency error
 shed_resolve_dependencies () {
     local -n DEPS=$1
     local DEPTYPE=$2
+    local CANDEFER=false
     local DEPACTION='status'
     local DEP
-    local STATUSRETVAL
-    local DEPRETVAL=0
+    local DEP_RESOLVE_RETVAL=0
+    local DEP_RETVAL=0
     if $SHOULDINSTALLDEPS; then
         case "$DEPTYPE" in
-            install|build)
+            install)
+                CANDEFER=true
+                ;&
+            build|deferred|runtime)
                 DEPACTION='install'
-            ;;
+                ;;
             upgrade)
                 DEPACTION='upgrade'
-            ;;
+                ;;
         esac
     fi
     if ! $SHOULDIGNOREDEPS && [ ${#DEPS[@]} -gt 0 ]; then
         echo "Resolving $DEPTYPE dependencies for '$NAME'..."
         for DEP in "${DEPS[@]}"; do
+            local ISHARDDEP=true
+            if [ ${#DEP} -gt 2 ] && [ "${DEP:0:1}" == '(' ] && [ "${DEP: -1}" == ')' ]; then
+                ISHARDDEP=false
+                DEP="${DEP:1:$(expr ${#DEP} - 2)}"
+            fi
             if [ "$DEP" == "$DEPENDENCY_OF" ]; then
+                # Do not attempt to install a circular dependency
                 DEPACTION='status'
             fi
             case "$DEPACTION" in
@@ -438,29 +456,38 @@ shed_resolve_dependencies () {
                                 ;;
                         esac
                     done
-                    shedmake "${DEPARGS[@]}" || return 1
+                    shedmake "${DEPARGS[@]}"
+                    DEP_RETVAL=$?
+                    if [ $DEP_RETVAL -ne 0 ]; then
+                        if $ISHARDDEP; then
+                            DEP_RESOLVE_RETVAL=$DEP_RETVAL
+                            break
+                        # this fails because dependency of is empty and dep is harfbuzz
+                        elif [ $DEP_RETVAL -eq 40 ] && $CANDEFER; then
+                            echo "Deferring resolution of soft circular dependency '$DEP'."
+                            DEFERREDDEPS+=( "$DEP" )
+                        fi
+                    fi
                 ;;
                 status)
                     # Ensure package is installed, if not up-to-date
                     shedmake status "$DEP"
-                    STATUSRETVAL=$?
-                    if [ $STATUSRETVAL -ne 0 ] && [ $STATUSRETVAL -ne 2 ]; then
-                        DEPRETVAL=1
-                        if [ "$DEP" == "$DEPENDENCY_OF" ]; then
-                            echo "Unmet circular dependency on '$DEP' in '$NAME'"
-                            if $VERBOSE; then
-                                echo "Try installing '$DEP' without this dependency, compiling '$NAME' and re-compiling '$DEP' afterwards."
-                            fi
+                    DEP_RETVAL=$?
+                    if $ISHARDDEP && [ $DEP_RETVAL -ne 0 ] && [ $DEP_RETVAL -ne 10 ]; then
+                        if [ $DEP_RETVAL -eq 11 ] && [ "$DEP" == "$DEPENDENCY_OF" ]; then
+                                DEP_RESOLVE_RETVAL=40
+                        else
+                                DEP_RESOLVE_RETVAL=$DEP_RETVAL
                         fi
                     fi
                 ;;
             esac
         done
     fi
-    if [ $DEPRETVAL -ne 0 ]; then
+    if [ $DEP_RESOLVE_RETVAL -ne 0 ]; then
         echo "Action aborted due to unmet $DEPTYPE dependencies."
     fi
-    return $DEPRETVAL
+    return $DEP_RESOLVE_RETVAL
 }
 
 shed_strip_binaries () {
@@ -689,10 +716,16 @@ shed_fetch_source () {
     fi
 }
 
+# Returns:
+#    20 - Package build permission error
+#    21 - Source acquisition error
+#    22 - Build script missing error
+#    23 - Build failed error
+#    24 - Binary archive creation error
 shed_build () {
     if $REQUIREROOT && [[ $EUID -ne 0 ]]; then
         echo "Root privileges are required to build this package."
-        return 1
+        return 20
     fi
 
     # Working directory management
@@ -702,7 +735,7 @@ shed_build () {
     export SHED_FAKEROOT="${WORKDIR}/fakeroot"
 
     # Source acquisition and unpacking
-    shed_fetch_source "$WORKDIR" || return 1
+    shed_fetch_source "$WORKDIR" || return 21
     if $KEEPSOURCE && [ ! -d "$SRCCACHEDIR" ]; then
         mkdir "$SRCCACHEDIR"
     fi
@@ -745,13 +778,13 @@ shed_build () {
         shed_run_script "${SHED_PKGDIR}/build.sh"
     else
         echo "Missing build script for '$NAME' ($SHED_VERSION_TUPLE)"
-        return 1
+        return 22
     fi
 
     if [ $? -ne 0 ]; then
         echo "Failed to build '$NAME' ($SHED_VERSION_TUPLE)"
         rm -rf "$WORKDIR"
-        return 1
+        return 23
     fi
     if ! $VERBOSE; then
         echo 'done'
@@ -777,7 +810,7 @@ shed_build () {
         mkdir "$BINCACHEDIR"
     fi
     echo -n "Creating binary archive $(shed_binary_archive_name)..."
-    tar -caf "${BINCACHEDIR}/$(shed_binary_archive_name)" -C "$SHED_FAKEROOT" . || return 1
+    tar -caf "${BINCACHEDIR}/$(shed_binary_archive_name)" -C "$SHED_FAKEROOT" . || return 24
     echo 'done'
 
     # Delete Temporary Files
@@ -785,10 +818,18 @@ shed_build () {
     rm -rf "$WORKDIR"
 }
 
+# Returns:
+# 20-29 - Build failed error
+#    30 - Package install permission error
+#    31 - Pre-install script error
+#    32 - Install script error
+#    33 - Binary archive acquisition error
+#    34 - Binary archive extraction error
+#    35 - Post-install script error
 shed_install () {
     if [[ $EUID -ne 0 ]]; then
         echo "Root privileges are required to install a package."
-        return 1
+        return 30
     fi
 
     # Prepare log directory
@@ -803,9 +844,9 @@ shed_install () {
             echo -n "Running pre-install script for '$NAME' ($SHED_VERSION_TUPLE)..."
             if $VERBOSE; then echo; fi
             if [ "$SHED_INSTALLROOT" == '/' ]; then
-                shed_run_script "${SHED_PKGDIR}/preinstall.sh" || return 1
+                shed_run_script "${SHED_PKGDIR}/preinstall.sh" || return 31
             else
-                shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" preinstall.sh || return 1
+                shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" preinstall.sh || return 31
             fi
             if ! $VERBOSE; then echo 'done'; fi
         else
@@ -819,9 +860,9 @@ shed_install () {
             echo -n "Running install script for '$NAME' ($SHED_VERSION_TUPLE)..."
             if $VERBOSE; then echo; fi
             if [ "$SHED_INSTALLROOT" == '/' ]; then
-                shed_run_script "${SHED_PKGDIR}/install.sh" || return 1
+                shed_run_script "${SHED_PKGDIR}/install.sh" || return 32
             else
-                shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" install.sh || return 1
+                shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" install.sh || return 32
             fi
             if ! $VERBOSE; then echo 'done'; fi
         else
@@ -835,18 +876,22 @@ shed_install () {
                 if [ ! -r "$BINARCHIVE" ]; then
                     # Or, failing that, build it from scratch
                     shedmake build "${SHED_PKGDIR}" "${PARSEDARGS[@]}"
+                    local BUILDRETVAL=$?
+                    if [ $BUILDRETVAL -ne 0 ]; then
+                        echo "Unable to produce or obtain binary archive: $(shed_binary_archive_name)"
+                        return $BUILDRETVAL
+                    fi
                 fi
             fi
             if [ -r "$BINARCHIVE" ]; then
                 echo -n "Installing files from binary archive $(shed_binary_archive_name)..."
-                tar xvhf "$BINARCHIVE" -C "$SHED_INSTALLROOT" > "$SHED_INSTALL_BOM" || return 1
+                tar xvhf "$BINARCHIVE" -C "$SHED_INSTALLROOT" > "$SHED_INSTALL_BOM" || return 34
                 echo 'done'
                 if ! $KEEPBINARY; then
                     rm "$BINARCHIVE"
                 fi
-            else
-                echo "Unable to produce or obtain binary archive: $(shed_binary_archive_name)"
-                return 1
+            else 
+                return 33
             fi
         fi
     else
@@ -859,9 +904,9 @@ shed_install () {
             echo -n "Running post-install script for '$NAME' ($SHED_VERSION_TUPLE)..."
             if $VERBOSE; then echo; fi
             if [ "$SHED_INSTALLROOT" == '/' ]; then
-                shed_run_script "${SHED_PKGDIR}/postinstall.sh" || return 1
+                shed_run_script "${SHED_PKGDIR}/postinstall.sh" || return 35
             else
-                shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" postinstall.sh || return 1
+                shed_run_chroot_script "$SHED_INSTALLROOT" "$SHED_CHROOT_PKGDIR" postinstall.sh || return 35
             fi
             if ! $VERBOSE; then echo 'done'; fi
         else
@@ -964,6 +1009,10 @@ shed_clean_all () {
     done
 }
 
+# Returns:
+#    0 - Package is installed and up-to-date
+#   10 - Package is installed but update is available
+#   11 - Package is available but not installed
 shed_package_status () {
     # NOTE: Reserve retval 1 for packages not found in managed repositories
     if [ -n "$SHED_INSTALLED_VERSION_TUPLE" ]; then
@@ -972,12 +1021,56 @@ shed_package_status () {
             return 0
         else
             echo "Package '$NAME' ($SHED_INSTALLED_VERSION_TUPLE) is installed but $SHED_VERSION_TUPLE is available"
-            return 2
+            return 10
         fi
     else
         echo "Package '$NAME' ($SHED_VERSION_TUPLE) is available but not installed"
-        return 3
+        return 11
     fi
+}
+
+shed_repo_status_at_path () {
+    local PACKAGE
+    local PKGSTATUS
+    local -i NUMPKGS=0
+    local -i NUMINSTALLED=0
+    local -i NUMUPDATES=0
+    local PKGSWITHUPDATES=( )
+    echo -n "Shedmake is evaluating packages in the repository at $1..."
+    if $VERBOSE; then echo; fi
+    for PACKAGE in "${1}"/*; do
+        if [ ! -d "$PACKAGE" ]; then
+            continue
+        fi
+        shed_read_package_meta "$PACKAGE" || continue
+        shed_package_status 1>&3 2>&4
+        PKGSTATUS=$?
+        if [ "$PKGSTATUS" -ne 11 ]; then
+            ((++NUMINSTALLED))
+        fi
+        if [ "$PKGSTATUS" -eq 10 ]; then
+            ((++NUMUPDATES))
+            PKGSWITHUPDATES+=( "'$NAME' ($SHED_INSTALLED_VERSION_TUPLE) -> $SHED_VERSION_TUPLE" )
+        fi
+        ((++NUMPKGS))
+    done
+    if ! $VERBOSE; then echo 'done'; fi
+    echo "$NUMINSTALLED of $NUMPKGS installed, with $NUMUPDATES update(s) available."
+    if ! $VERBOSE && [ ${#PKGSWITHUPDATES[@]} -gt 0 ]; then
+        echo 'Packages with available updates:'
+        for PACKAGE in "${PKGSWITHUPDATES[@]}"; do
+            echo "$PACKAGE"
+        done
+    fi
+}
+
+shed_repo_status () {
+    local REPO=$(shed_locate_repo "$1")
+    if [ -z "$REPO" ]; then
+        shed_print_repo_locate_error "$REPO"
+        return 1
+    fi
+    shed_repo_status_at_path "$REPO"
 }
 
 shed_upgrade () {
@@ -986,7 +1079,7 @@ shed_upgrade () {
         return 1
     fi
     shed_package_status
-    if [ $? -eq 2 ]; then
+    if [ $? -eq 10 ]; then
         FORCEACTION=true
         SHOULDINSTALLDEPS=true
         shed_resolve_dependencies INSTALLDEPS 'upgrade' && \
@@ -1096,6 +1189,7 @@ shed_command () {
     local SHEDCMD
     if [ $# -gt 0 ]; then
         SHEDCMD=$1; shift
+        shed_load_defaults
     else
         SHEDCMD=version
     fi
@@ -1108,7 +1202,6 @@ shed_command () {
             fi
             REPOURL="$1"; shift
             local ADDTOREPO="$2"; shift
-            shed_load_defaults && \
             shed_parse_args "$@" && \
             shed_add "$ADDTOREPO"
             ;;
@@ -1118,7 +1211,6 @@ shed_command () {
                 return 1
             fi
             REPOURL="$1"; shift
-            shed_load_defaults && \
             shed_parse_args "$@" && \
             shed_add_repo
             ;;
@@ -1127,7 +1219,6 @@ shed_command () {
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_load_defaults && \
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" && \
@@ -1140,8 +1231,9 @@ shed_command () {
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_load_defaults && \
             shed_read_package_meta "$1" && \
+            shift && \
+            shed_parse_args "$@" && \
             shed_clean
             ;;
         clean-repo|clean-repo-list)
@@ -1149,15 +1241,12 @@ shed_command () {
                 shed_print_args_error "$SHEDCMD" '<repo_name> [<options>]'
                 return 1
             fi
-            shed_load_defaults && \
-            shed_clean_repos "$1"
+            local CLEANREPONAME="$1"; shift
+            shed_parse_args "$@" && \
+            shed_clean_repo "$CLEANREPONAME"
             ;;
         clean-all)
-            if [ $# -ne 0 ]; then
-                shed_print_args_error "$SHEDCMD" ''
-                return 1
-            fi
-            shed_load_defaults && \
+            shed_parse_args "$@" && \
             shed_clean_all
             ;;
         create|create-list|create-repo|create-repo-list)
@@ -1166,8 +1255,7 @@ shed_command () {
                 return 1
             fi
             local CREATENAME="$1"; shift
-            shed_load_defaults && \
-            shed_parse_args "$@" || return 1
+            shed_parse_args "$@" || return $?
             case "$SHEDCMD" in
                 create|create-list)
                     shed_create "$CREATENAME"
@@ -1183,7 +1271,6 @@ shed_command () {
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_load_defaults && \
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" && \
@@ -1194,7 +1281,6 @@ shed_command () {
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_load_defaults && \
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" && \
@@ -1205,34 +1291,39 @@ shed_command () {
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_load_defaults && \
             shed_read_package_meta "$1" && \
             shift && \
-            shed_parse_args "$@" || return 1
+            shed_parse_args "$@" || return $?
             if [ -n "$SHED_INSTALLED_VERSION_TUPLE" ] && ! $FORCEACTION; then
                 echo "Package '$NAME' is already installed (${SHED_INSTALLED_VERSION_TUPLE})"
                 return 0
             fi
             echo "Shedmake is preparing to install '$NAME' ($SHED_VERSION_TUPLE) to ${SHED_INSTALLROOT}..." && \
             shed_resolve_dependencies INSTALLDEPS 'install' && \
-            shed_install
+            shed_install && \
+            shed_resolve_dependencies DEFERREDDEPS 'deferred' || return $?
+            if [ ${#DEFERREDDEPS[@]} -gt 0 ]; then
+                echo "Shedmake will re-install '$NAME' ($SHED_VERSION_TUPLE) for deferred dependencies..."
+                shed_clean && \
+                shed_install
+            fi
+            shed_resolve_dependencies RUNDEPS 'runtime'
             ;;
         purge|purge-list|uninstall|uninstall-list)
             if [ $# -lt 1 ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_load_defaults && \
             shed_read_package_meta "$1" && \
             shift && \
-            shed_parse_args "$@" || return 1
+            shed_parse_args "$@" || return $?
             if [ ! -e "$SHED_INSTALL_HISTORY" ]; then
                 echo "Unable to locate installed version history for '$NAME'"
                 return 1
             fi
             local OLDVERSIONTUPLE
             local NEWVERSIONTUPLE
-            if [ "$SHEDCMD" == 'cleanup' ]; then
+            if [ "$SHEDCMD" == 'purge' ] || [ "$SHEDCMD" == 'purge-list' ]; then
                 OLDVERSIONTUPLE="$(tail -n 2 $SHED_INSTALL_HISTORY | head -n 1)"
                 NEWVERSIONTUPLE="$SHED_INSTALLED_VERSION_TUPLE"
             else
@@ -1246,7 +1337,6 @@ shed_command () {
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_load_defaults && \
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" && \
@@ -1264,34 +1354,38 @@ shed_command () {
                 shed_print_repo_locate_error "$PUSHREPO"
                 return 1
             fi
-            shed_load_defaults && \
             shed_parse_args "$@" && \
             cd "$REPOPATH" && \
             shed_push_repo "$PUSHREPO"
+            ;;
+        repo-status|repo-status-list)
+            if [ $# -lt 1 ]; then
+                shed_print_args_error "$SHEDCMD" '<repo_name> [<options>]'
+                return 1
+            fi
+            local STATUSREPO="$1"; shift
+            shed_parse_args "$@" && \
+            shed_repo_status "$STATUSREPO"
             ;;
         status|status-list)
             if [ $# -ne 1 ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name>'
                 return 1
             fi
-            shed_load_defaults && \
             shed_read_package_meta "$1" && \
             shed_package_status
             ;;
         update-repo|update-repo-list)
-            if [ $# -ne 1 ]; then
-                shed_print_args_error "$SHEDCMD" '<repo_name>'
+            if [ $# -lt 1 ]; then
+                shed_print_args_error "$SHEDCMD" '<repo_name> [<options>]'
                 return 1
             fi
-            shed_load_defaults && \
-            shed_update_repo "$1"
+            local UPDATEREPO="$1"; shift
+            shed_parse_args "$@" && \
+            shed_update_repo "$UPDATEREPO"
             ;;
         update-all)
-            if [ $# -ne 0 ]; then
-                shed_print_args_error "$SHEDCMD" ''
-                return 1
-            fi
-            shed_load_defaults && \
+            shed_parse_args "$@" && \
             shed_update_all
             ;;
         upgrade|upgrade-list)
@@ -1299,7 +1393,6 @@ shed_command () {
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_load_defaults && \
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" && \
@@ -1310,25 +1403,15 @@ shed_command () {
                 shed_print_args_error "$SHEDCMD" '<repo_name> [<options>]'
                 return 1
             fi
-            shed_load_defaults && \
-            shift && \
+            local UPGRADEREPO="$1"; shift
             shed_parse_args "$@" && \
-            shed_upgrade_repo "$1"
+            shed_upgrade_repo "$UPGRADEREPO"
             ;;
         upgrade-all)
-            if [ $# -ne 0 ]; then
-                shed_print_args_error "$SHEDCMD" ''
-                return 1
-            fi
-            shed_load_defaults && \
             shed_parse_args "$@" && \
             shed_upgrade_all
             ;;
         version)
-            if [ $# -ne 0 ]; then
-                shed_print_args_error "$SHEDCMD" ''
-                return 1
-            fi
             echo "Shedmake v${SHEDMAKEVER} - A trivial package management tool for Shedbuilt GNU/Linux"
             ;;
         *)
