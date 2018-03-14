@@ -19,8 +19,16 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.9.4
+SHEDMAKEVER=0.9.5
 CFGFILE=/etc/shedmake.conf
+
+shed_parse_yes_no () {
+    case "$1" in
+        yes) echo 'true';;
+        no) echo 'false';;
+        *) return 1;;
+    esac
+}
 
 shed_string_in_array () {
     local -n HAYSTACK=$1
@@ -32,14 +40,6 @@ shed_string_in_array () {
         fi
     done
     return 1
-}
-
-shed_parse_yes_no () {
-    case "$1" in
-        yes) echo 'true';;
-        no) echo 'false';;
-        *) return 1;;
-    esac
 }
 
 shed_set_binary_archive_compression () {
@@ -82,26 +82,26 @@ shed_print_repo_locate_error () {
     echo "Unable to locate managed package repository named '$1'"
 }
 
-# Shedmake Config File Defaults
-if [ ! -r "$CFGFILE" ]; then
-    echo "Unable to read from config file: '$CFGFILE'"
-    exit 1
-fi
-
-TMPDIR="$(sed -n 's/^TMP_DIR=//p' $CFGFILE)"
-LOCALREPODIR="$(sed -n 's/^LOCAL_REPO_DIR=//p' $CFGFILE)"
-REMOTEREPODIR="$(sed -n 's/^REMOTE_REPO_DIR=//p' $CFGFILE)"
-TEMPLATEDIR="$(sed -n 's/^TEMPLATE_DIR=//p' $CFGFILE)"
-DEFAULT_KEEPSOURCE=$(shed_parse_yes_no "$(sed -n 's/^KEEP_SRC=//p' $CFGFILE)")
-DEFAULT_KEEPBINARY=$(shed_parse_yes_no "$(sed -n 's/^KEEP_BIN=//p' $CFGFILE)")
-DEFAULT_COMPRESSION="$(sed -n 's/^COMPRESSION=//p' $CFGFILE)"
-DEFAULT_NUMJOBS="$(sed -n 's/^NUM_JOBS=//p' $CFGFILE)"
-DEFAULT_DEVICE="$(sed -n 's/^DEVICE=//p' $CFGFILE)"
-export SHED_RELEASE="$(sed -n 's/^RELEASE=//p' $CFGFILE)"
-export SHED_CPU_CORE="$(sed -n 's/^CPU_CORE=//p' $CFGFILE)"
-export SHED_CPU_FEATURES="$(sed -n 's/^CPU_FEATURES=//p' $CFGFILE)"
-export SHED_NATIVE_TARGET="$(sed -n 's/^NATIVE_TARGET=//p' $CFGFILE)"
-export SHED_TOOLCHAIN_TARGET="$(sed -n 's/^TOOLCHAIN_TARGET=//p' $CFGFILE)"
+shed_load_config () {
+    if [ ! -r "$CFGFILE" ]; then
+        echo "Unable to read from config file: '$CFGFILE'"
+        return 1
+    fi
+    TMPDIR="$(sed -n 's/^TMP_DIR=//p' $CFGFILE)"
+    LOCALREPODIR="$(sed -n 's/^LOCAL_REPO_DIR=//p' $CFGFILE)"
+    REMOTEREPODIR="$(sed -n 's/^REMOTE_REPO_DIR=//p' $CFGFILE)"
+    TEMPLATEDIR="$(sed -n 's/^TEMPLATE_DIR=//p' $CFGFILE)"
+    DEFAULT_KEEPSOURCE=$(shed_parse_yes_no "$(sed -n 's/^KEEP_SRC=//p' $CFGFILE)")
+    DEFAULT_KEEPBINARY=$(shed_parse_yes_no "$(sed -n 's/^KEEP_BIN=//p' $CFGFILE)")
+    DEFAULT_COMPRESSION="$(sed -n 's/^COMPRESSION=//p' $CFGFILE)"
+    DEFAULT_NUMJOBS="$(sed -n 's/^NUM_JOBS=//p' $CFGFILE)"
+    DEFAULT_DEVICE="$(sed -n 's/^DEVICE=//p' $CFGFILE)"
+    export SHED_RELEASE="$(sed -n 's/^RELEASE=//p' $CFGFILE)"
+    export SHED_CPU_CORE="$(sed -n 's/^CPU_CORE=//p' $CFGFILE)"
+    export SHED_CPU_FEATURES="$(sed -n 's/^CPU_FEATURES=//p' $CFGFILE)"
+    export SHED_NATIVE_TARGET="$(sed -n 's/^NATIVE_TARGET=//p' $CFGFILE)"
+    export SHED_TOOLCHAIN_TARGET="$(sed -n 's/^TOOLCHAIN_TARGET=//p' $CFGFILE)"
+}
 
 shed_load_defaults () {
     VERBOSE=false
@@ -405,25 +405,16 @@ shed_package_info () {
 shed_resolve_dependencies () {
     local -n DEPS=$1
     local DEPTYPE=$2
-    local CANDEFER=false
+    local INSTALLACTION=$3
+    local CANDEFER=$4
     local DEPACTION='status'
     local DEP
     local DEP_RESOLVE_RETVAL=0
     local DEP_RETVAL=0
-    if $SHOULDINSTALLDEPS; then
-        case "$DEPTYPE" in
-            install)
-                CANDEFER=true
-                ;&
-            build|deferred|runtime)
-                DEPACTION='install'
-                ;;
-            upgrade)
-                DEPACTION='upgrade'
-                ;;
-        esac
-    fi
     if ! $SHOULDIGNOREDEPS && [ ${#DEPS[@]} -gt 0 ]; then
+        if $SHOULDINSTALLDEPS; then
+            DEPACTION="$INSTALLACTION"
+        fi
         echo "Resolving $DEPTYPE dependencies for '$NAME'..."
         for DEP in "${DEPS[@]}"; do
             local ISHARDDEP=true
@@ -547,12 +538,12 @@ shed_purge () {
                 case $PATHTYPE in
                     files)
                         if [ ! -d "$INSTALLEDPATH" ]; then
-                            rm -v "$INSTALLEDPATH"
+                            rm -v "$INSTALLEDPATH" 1>&3 2>&4
                         fi
                         ;;
                     directories)
                         if [ -d "$INSTALLEDPATH" ]; then
-                            rmdir -v "$INSTALLEDPATH"
+                            rmdir -v "$INSTALLEDPATH" 1>&3 2>&4
                         fi
                         ;;
                 esac
@@ -620,8 +611,11 @@ shed_add () {
         echo "A directory named '$REPONAME' is already present in local package repository '${1}'"
         return 1
     fi
-    git submodule add -b "$REPOBRANCH" "$REPOURL" && \
-    git submodule init || return 1
+    echo -n "Shedmake will add the package at $REPOURL to the local repository at ${LOCALREPODIR}/${1}..."
+    if $VERBOSE; then echo; fi
+    git submodule add -b "$REPOBRANCH" "$REPOURL" 1>&3 2>&4 && \
+    git submodule init 1>&3 2>&4 || return 1
+    if ! $VERBOSE; then echo 'done'; fi
 }
 
 shed_add_repo () {
@@ -634,13 +628,15 @@ shed_add_repo () {
         REPONAME="$(basename $REPOFILE .git)"
     fi
     shed_can_add_repo "$REPONAME" && \
-    cd "$REMOTEREPODIR" && \
-    git clone "$REPOURL" "$REPONAME" && \
+    cd "$REMOTEREPODIR" || return 1
+    echo -n "Shedmake will add the repository at $REPOURL to the remote repositories in $REMOTEREPODIR as $REPONAME..."
+    if $VERBOSE; then echo; fi
+    git clone "$REPOURL" "$REPONAME" 1>&3 2>&4 && \
     cd "$REPONAME" && \
-    git checkout "$REPOBRANCH" && \
-    git submodule init && \
-    git submodule update && \
-    echo "Successfully added remote repository '$REPONAME'"
+    git checkout "$REPOBRANCH" 1>&3 2>&4 && \
+    git submodule init 1>&3 2>&4 && \
+    git submodule update 1>&3 2>&4 || return 1
+    if ! $VERBOSE; then echo 'done'; fi
 }
 
 # Function: shed_download_file
@@ -685,27 +681,27 @@ shed_fetch_source () {
                     git init 1>&3 2>&4 && \
                     git remote add origin "$SRC" 1>&3 2>&4 || return 1
                 fi
-            else
-                cd "${1}/${NAME}-git"
             fi
+            cd "${1}/${NAME}-git"
             # Perform a shallow fetch of the desired refspec
             local LOCALREPOREF="$(sed -e "s/^refs\/heads\//refs\/remotes\/origin\//g" <<< $REPOREF)"
             git fetch --depth=1 origin +${REPOREF}:${LOCALREPOREF} 1>&3 2>&4 && \
             git checkout --quiet FETCH_HEAD 1>&3 2>&4 || return 1
-
             # TODO: Use signature for verification
         else 
             # Source is an archive
-            if [ ! -r "${SRCCACHEDIR}/${SRCFILE}" ]; then
-                shed_download_file "$SRC" "$SRCFILE" "$1"
-                if [ $? -ne 0 ]; then
-                    echo "Unable to download source archive $SRCFILE"
-                    return 1
+            if [ ! -r "${1}/${SRCFILE}" ]; then
+                if [ ! -r "${SRCCACHEDIR}/${SRCFILE}" ]; then
+                    shed_download_file "$SRC" "$SRCFILE" "$1"
+                    if [ $? -ne 0 ]; then
+                        echo "Unable to download source archive $SRCFILE"
+                        rm "${1}/${SRCFILE}"
+                        return 1
+                    fi
+                else
+                    cp "${SRCCACHEDIR}/${SRCFILE}" "$1"
                 fi
-            else
-                cp "${SRCCACHEDIR}/${SRCFILE}" "$1"
             fi
-
             # Verify Source Archive MD5
             shed_verify_file "${1}/${SRCFILE}" "$SRCMD5"
             if [ $? -ne 0 ]; then
@@ -757,7 +753,7 @@ shed_build () {
     fi
 
     # Determine Source Root Dir    
-    SRCDIR=$(ls -d */)
+    SRCDIR=$(ls -d */ 2>/dev/null)
     if [ $? -eq 0 ]; then
         if [ -d "$SRCDIR" ]; then
             export SHED_SRCDIR="${WORKDIR}/${SRCDIR}"
@@ -931,8 +927,8 @@ shed_install () {
 }
 
 shed_update_repo_at_path () {
-    cd "${1}" || return 1
-    if [[ ${1} =~ ^$REMOTEREPODIR.* ]]; then
+    cd "$1" || return 1
+    if [[ $1 =~ ^$REMOTEREPODIR.* ]]; then
         if [[ $EUID -ne 0 ]]; then
             echo 'Root privileges are required to update managed remote package repositories.'
             return 1
@@ -943,11 +939,14 @@ shed_update_repo_at_path () {
         git submodule init 1>&3 2>&4 && \
         git submodule update 1>&3 2>&4 || return 1
     else
-        echo -n "Shedmake will update the local repository at ${1}..."
-        if $VERBOSE; then echo; fi
-        git submodule update --remote 1>&3 2>&4 || return 1
+        if [ -d "${1}/.git" ]; then
+            echo -n "Shedmake will update the local repository at ${1}..."
+            if $VERBOSE; then echo; fi
+            git submodule update --remote 1>&3 2>&4 || return 1
+        fi
     fi
     if ! $VERBOSE; then echo 'done'; fi
+    shed_repo_status_at_path "$1"
 }
 
 shed_update_repo () {
@@ -1036,7 +1035,7 @@ shed_repo_status_at_path () {
     local -i NUMINSTALLED=0
     local -i NUMUPDATES=0
     local PKGSWITHUPDATES=( )
-    echo -n "Shedmake is evaluating packages in the repository at $1..."
+    echo -n "Evaluating packages in the repository at $1..."
     if $VERBOSE; then echo; fi
     for PACKAGE in "${1}"/*; do
         if [ ! -d "$PACKAGE" ]; then
@@ -1073,32 +1072,21 @@ shed_repo_status () {
     shed_repo_status_at_path "$REPO"
 }
 
-shed_upgrade () {
-    if [[ $EUID -ne 0 ]]; then
-        echo "Root privileges are required to upgrade packages."
-        return 1
-    fi
-    shed_package_status
-    if [ $? -eq 10 ]; then
-        FORCEACTION=true
-        SHOULDINSTALLDEPS=true
-        shed_resolve_dependencies INSTALLDEPS 'upgrade' && \
-        shed_install || return $?
-    fi
-    # Ensure retval of 0, as shed_package_status may have returned an acceptable non-zero value
-    return 0
-}
-
 shed_upgrade_repo_at_path () {
-    echo "Shedmake is preparing upgrade packages in the repository at '$1'..."
+    echo "Shedmake is preparing to upgrade packages in the repository at '$1'..."
     local PACKAGE
+    local UPGRRETVAL
     for PACKAGE in "${1}"/*; do
         if [ ! -d "$PACKAGE" ]; then
             continue
         fi
-        shed_read_package_meta "$PACKAGE" && \
-        shed_upgrade || return 1
+        shedmake upgrade "$PACKAGE" "${PARSEDARGS[@]}"
+        UPGRRETVAL=$?
+        if [ $UPGRRETVAL -ne 0 ] && [ $UPGRRETVAL -ne 11 ]; then
+            return $UPGRRETVAL
+        fi
     done
+    return 0
 }
 
 shed_upgrade_repo () {
@@ -1116,7 +1104,7 @@ shed_upgrade_all () {
         if [ ! -d "${REPO}" ]; then
             continue
         fi
-        shed_upgrade_repo "$REPO" || return 1
+        shed_upgrade_repo "$REPO" || return $?
     done
 }
 
@@ -1223,7 +1211,7 @@ shed_command () {
             shift && \
             shed_parse_args "$@" && \
             echo "Shedmake is preparing to build '$NAME' ($SHED_VERSION_TUPLE)..." && \
-            shed_resolve_dependencies BUILDDEPS 'build' && \
+            shed_resolve_dependencies BUILDDEPS 'build' 'install' 'false' && \
             shed_build
             ;;
         clean|clean-list)
@@ -1286,28 +1274,67 @@ shed_command () {
             shed_parse_args "$@" && \
             shed_package_info
             ;;
-        install|install-list)
+        install|install-list|upgrade|upgrade-list)
             if [ $# -lt 1 ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
+            local PKGSTATUS
+            local DEP_CMD_ACTION
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" || return $?
-            if [ -n "$SHED_INSTALLED_VERSION_TUPLE" ] && ! $FORCEACTION; then
-                echo "Package '$NAME' is already installed (${SHED_INSTALLED_VERSION_TUPLE})"
-                return 0
-            fi
-            echo "Shedmake is preparing to install '$NAME' ($SHED_VERSION_TUPLE) to ${SHED_INSTALLROOT}..." && \
-            shed_resolve_dependencies INSTALLDEPS 'install' && \
+            shed_package_status &>/dev/null
+            PKGSTATUS=$?
+            case "$SHEDCMD" in
+                install|install-list)
+                    DEP_CMD_ACTION='install'
+                    if [ $PKGSTATUS -eq 0 ] || [ $PKGSTATUS -eq 10 ]; then
+                        if ! $FORCEACTION; then
+                            echo "Package '$NAME' (${SHED_INSTALLED_VERSION_TUPLE}) is already installed"
+                            return 0
+                        fi
+                    elif [ $PKGSTATUS -ne 11 ]; then
+                        return $PKGSTATUS
+                    fi
+                    ;;
+                upgrade|upgrade-list)
+                    DEP_CMD_ACTION='upgrade'
+                    SHOULDINSTALLDEPS=true
+                    if [ $PKGSTATUS -eq 0 ]; then
+                        if ! $FORCEACTION; then
+                            echo "Latest version of package '$NAME' is already installed (${SHED_INSTALLED_VERSION_TUPLE})"
+                            return 0
+                        fi
+                    elif [ $PKGSTATUS -eq 11 ]; then
+                        if [ -n "$DEPENDENCY_OF" ]; then
+                            DEP_CMD_ACTION='install'
+                        else
+                            echo "Package '$NAME' has not been installed"
+                            return $PKGSTATUS
+                        fi
+                    elif [ $PKGSTATUS -ne 10 ]; then
+                        return $PKGSTATUS
+                    fi
+                    ;;
+            esac
+            case "$DEP_CMD_ACTION" in
+                install)
+                    echo "Shedmake is preparing to install '$NAME' ($SHED_VERSION_TUPLE) to ${SHED_INSTALLROOT}..."
+                    ;;
+                upgrade)
+                    echo "Shedmake is preparing to upgrade '$NAME' ($SHED_VERSION_TUPLE) on ${SHED_INSTALLROOT}..."
+                    ;;
+            esac
+            shed_resolve_dependencies INSTALLDEPS "$DEP_CMD_ACTION" "$DEP_CMD_ACTION" 'true' && \
             shed_install && \
-            shed_resolve_dependencies DEFERREDDEPS 'deferred' || return $?
+            shed_resolve_dependencies DEFERREDDEPS 'deferred' "$DEP_CMD_ACTION" 'false' || return $?
             if [ ${#DEFERREDDEPS[@]} -gt 0 ]; then
                 echo "Shedmake will re-install '$NAME' ($SHED_VERSION_TUPLE) for deferred dependencies..."
                 shed_clean && \
-                shed_install
+                shed_install || return $?
             fi
-            shed_resolve_dependencies RUNDEPS 'runtime'
+            shed_resolve_dependencies RUNDEPS 'runtime' "$DEP_CMD_ACTION" 'false'
             ;;
         purge|purge-list|uninstall|uninstall-list)
             if [ $# -lt 1 ]; then
@@ -1317,9 +1344,9 @@ shed_command () {
             shed_read_package_meta "$1" && \
             shift && \
             shed_parse_args "$@" || return $?
-            if [ ! -e "$SHED_INSTALL_HISTORY" ]; then
-                echo "Unable to locate installed version history for '$NAME'"
-                return 1
+            if [ -z "$SHED_INSTALLED_VERSION_TUPLE" ]; then
+                echo "Package '$NAME' does not appear to be installed"
+                return 11
             fi
             local OLDVERSIONTUPLE
             local NEWVERSIONTUPLE
@@ -1388,16 +1415,6 @@ shed_command () {
             shed_parse_args "$@" && \
             shed_update_all
             ;;
-        upgrade|upgrade-list)
-            if [ $# -lt 1 ]; then
-                shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
-                return 1
-            fi
-            shed_read_package_meta "$1" && \
-            shift && \
-            shed_parse_args "$@" && \
-            shed_upgrade
-            ;;
         upgrade-repo|upgrade-repo-list)
             if [ $# -lt 1 ]; then
                 shed_print_args_error "$SHEDCMD" '<repo_name> [<options>]'
@@ -1429,6 +1446,7 @@ if [ $# -gt 0 ] && [ "${1: -5}" = '-list' ]; then
         echo "Unable to read from list file: '$2'"
         exit 1
     fi
+    shed_load_config || return $?
     LISTWD="$(pwd)"
     LISTCMD="$1"; shift
     SMLFILE=$(readlink -f -n "$1"); shift
@@ -1442,5 +1460,6 @@ if [ $# -gt 0 ] && [ "${1: -5}" = '-list' ]; then
         cd "$LISTWD"
     done < "$SMLFILE"
 else
+    shed_load_config &&
     shed_command "$@"
 fi
