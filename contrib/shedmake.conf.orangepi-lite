@@ -1,0 +1,14 @@
+KEEP_SRC=no
+KEEP_BIN=no
+NUM_JOBS=4
+COMPRESSION=xz
+TMP_DIR=/var/tmp/shedmake
+REMOTE_REPO_DIR=/var/shedmake/repos/remote
+LOCAL_REPO_DIR=/var/shedmake/repos/local
+TEMPLATE_DIR=/var/shedmake/template
+RELEASE=amano
+DEVICE=orangepi-lite
+CPU_CORE=cortex-a7
+CPU_FEATURES=neon-vfpv4
+NATIVE_TARGET=armv7l-unknown-linux-gnueabihf
+TOOLCHAIN_TARGET=armv7l-shedstrap-linux-gnueabihf
