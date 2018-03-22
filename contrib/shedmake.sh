@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.9.5
+SHEDMAKEVER=0.9.6
 CFGFILE=/etc/shedmake.conf
 
 shed_parse_yes_no () {
@@ -65,14 +65,6 @@ shed_set_output_verbosity () {
     fi
 }
 
-shed_wget_verbosity () {
-    if $VERBOSE; then
-        echo '--verbose'
-    else
-        echo '--no-verbose'
-    fi
-}
-
 shed_print_args_error () {
     echo "Invalid number of arguments to '$1'. Usage: shedmake $1 $2"
 }
@@ -91,8 +83,8 @@ shed_load_config () {
     LOCALREPODIR="$(sed -n 's/^LOCAL_REPO_DIR=//p' $CFGFILE)"
     REMOTEREPODIR="$(sed -n 's/^REMOTE_REPO_DIR=//p' $CFGFILE)"
     TEMPLATEDIR="$(sed -n 's/^TEMPLATE_DIR=//p' $CFGFILE)"
-    DEFAULT_KEEPSOURCE=$(shed_parse_yes_no "$(sed -n 's/^KEEP_SRC=//p' $CFGFILE)")
-    DEFAULT_KEEPBINARY=$(shed_parse_yes_no "$(sed -n 's/^KEEP_BIN=//p' $CFGFILE)")
+    DEFAULT_CACHESOURCE=$(shed_parse_yes_no "$(sed -n 's/^CACHE_SRC=//p' $CFGFILE)")
+    DEFAULT_CACHEBINARY=$(shed_parse_yes_no "$(sed -n 's/^CACHE_BIN=//p' $CFGFILE)")
     DEFAULT_COMPRESSION="$(sed -n 's/^COMPRESSION=//p' $CFGFILE)"
     DEFAULT_NUMJOBS="$(sed -n 's/^NUM_JOBS=//p' $CFGFILE)"
     DEFAULT_DEVICE="$(sed -n 's/^DEVICE=//p' $CFGFILE)"
@@ -106,8 +98,9 @@ shed_load_config () {
 shed_load_defaults () {
     VERBOSE=false
     FORCEACTION=false
-    KEEPSOURCE="$DEFAULT_KEEPSOURCE"
-    KEEPBINARY="$DEFAULT_KEEPBINARY"
+    SHOULDCLEANTEMP=true
+    SHOULDCACHESOURCE="$DEFAULT_CACHESOURCE"
+    SHOULDCACHEBINARY="$DEFAULT_CACHEBINARY"
     SHOULDIGNOREDEPS=false
     SHOULDINSTALLDEPS=false
     SHOULDPREINSTALL=true
@@ -160,6 +153,10 @@ shed_parse_args () {
                 SHOULDINSTALL=false
                 continue
                 ;;
+            -r|--retain-temp)
+                SHOULDCLEANTEMP=false
+                continue
+                ;;
             -v|--verbose)
                 VERBOSE=true
                 shed_set_output_verbosity $VERBOSE
@@ -183,6 +180,9 @@ shed_parse_args () {
                 ;;
             -b|--branch)
                 REPOBRANCH="$OPTVAL"
+                ;;
+            -B|--binary-cache)
+                BINCACHEDIR="$OPTVAL"
                 ;;
             -d|--device)
                 SHED_DEVICE="$OPTVAL"
@@ -221,6 +221,9 @@ shed_parse_args () {
                     echo "Invalid argument for '$OPTION' Please specify 'yes' or 'no'"
                     return 1
                 fi
+                ;;
+            -S|--source-cache)
+                SRCCACHEDIR="$OPTVAL"
                 ;;
             -t|--target)
                 SHED_TARGET="$OPTVAL"
@@ -309,6 +312,8 @@ shed_read_package_meta () {
     REVISION=$(sed -n 's/^REVISION=//p' ${PKGMETAFILE})
     export SHED_VERSION_TUPLE="${VERSION}-${REVISION}"
     export SHED_INSTALL_BOM="${SHED_LOGDIR}/${SHED_VERSION_TUPLE}.bom"
+    WORKDIR="${TMPDIR%/}/${NAME}_${SHED_VERSION_TUPLE}"
+    export SHDPKG_FAKEROOT="${WORKDIR}/fakeroot"
     SRC=$(sed -n 's/^SRC=//p' ${PKGMETAFILE})
     SRCFILE=$(sed -n 's/^SRCFILE=//p' ${PKGMETAFILE})
     if [ -z "$SRCFILE" ] && [ -n "$SRC" ]; then
@@ -508,7 +513,7 @@ shed_purge () {
     cd "$SHED_LOGDIR"
     if [ -z "$OLDVERSION" ] || [ "$NEWVERSION" == "$OLDVERSION" ]; then
         if $VERBOSE; then
-            echo "No need to clean up orphaned files between specified versions."
+            echo "Skipping purge of files orphaned by an upgrade."
         fi
         return 0
     fi
@@ -519,14 +524,15 @@ shed_purge () {
     if [ -z "$NEWVERSION" ]; then
         # Delete all files from old version if no new version replaces it
         PATHSTODELETE="$(<${OLDVERSION}.bom)"
-        echo "Shedmake will uninstall '$NAME'..."
+        echo -n "Shedmake will uninstall '$NAME' ($OLDVERSION)..."
     elif [ ! -e ${NEWVERSION}.bom ]; then
         echo "Unable to retrieve install log for current version '$NEWVERSION'"
         return 1
     else
         PATHSTODELETE="$(comm -13 ${NEWVERSION}.bom ${OLDVERSION}.bom)"
-        echo "Shedmake will delete files orphaned when '$NAME' was upgraded from $OLDVERSION to $NEWVERSION..."
+        echo -n "Shedmake will purge files orphaned when '$NAME' was upgraded from $OLDVERSION to $NEWVERSION..."
     fi
+    if $VERBOSE; then echo; fi
     local OLDPATH
     local PATHTYPE
     for PATHTYPE in files directories
@@ -553,8 +559,9 @@ shed_purge () {
     if [ -z "$NEWVERSION" ]; then
         # Delete the install log dir if uninstalling
         cd ..
-        rm -rf "$SHED_LOGDIR"
+        rm -rvf "$SHED_LOGDIR" 1>&3 2>&4
     fi
+    if ! $VERBOSE; then echo 'done'; fi
 }
 
 shed_run_script () {
@@ -650,7 +657,7 @@ shed_download_file () {
         mkdir "$3"
     fi
     cd "$3"
-    wget -O "$2" "$1" $(shed_wget_verbosity)
+    wget -O "$2" "$1" 1>&3 2>&4
 }
 
 # Function: shed_verify_file
@@ -669,13 +676,21 @@ shed_verify_file () {
 }
 
 shed_fetch_source () {
-   if [ -n "$SRC" ]; then
+    if [ -n "$SRC" ]; then
+        # Create destination folder if absent
+        if [ ! -d "$1" ]; then
+            mkdir -p "$1" || return 1
+        fi
         if [ "${SRC: -4}" = '.git' ]; then
             # Source is a git repository
             if [ ! -d "${1}/${NAME}-git" ]; then
                 if [ -d "${SRCCACHEDIR}/${NAME}-git" ]; then
+                    echo -n "Updating source repository for '$NAME'..."
+                    if $VERBOSE; then echo; fi
                     cp -R "${SRCCACHEDIR}/${NAME}-git" "$1"
                 else
+                    echo -n "Fetching source repository for '$NAME'..."
+                    if $VERBOSE; then echo; fi
                     mkdir -p "${1}/${NAME}-git"
                     cd "${1}/${NAME}-git"
                     git init 1>&3 2>&4 && \
@@ -687,17 +702,22 @@ shed_fetch_source () {
             local LOCALREPOREF="$(sed -e "s/^refs\/heads\//refs\/remotes\/origin\//g" <<< $REPOREF)"
             git fetch --depth=1 origin +${REPOREF}:${LOCALREPOREF} 1>&3 2>&4 && \
             git checkout --quiet FETCH_HEAD 1>&3 2>&4 || return 1
+            if ! $VERBOSE; then echo 'done'; fi
             # TODO: Use signature for verification
         else 
             # Source is an archive
             if [ ! -r "${1}/${SRCFILE}" ]; then
                 if [ ! -r "${SRCCACHEDIR}/${SRCFILE}" ]; then
+                    echo -n "Fetching source archive for '$NAME'..."
+                    if $VERBOSE; then echo; fi
                     shed_download_file "$SRC" "$SRCFILE" "$1"
                     if [ $? -ne 0 ]; then
+                        if ! $VERBOSE; then echo; fi
                         echo "Unable to download source archive $SRCFILE"
                         rm "${1}/${SRCFILE}"
                         return 1
                     fi
+                    if ! $VERBOSE; then echo 'done'; fi
                 else
                     cp "${SRCCACHEDIR}/${SRCFILE}" "$1"
                 fi
@@ -724,27 +744,26 @@ shed_build () {
         return 20
     fi
 
-    # Working directory management
-    WORKDIR="${TMPDIR%/}/${NAME}"
+    # Work directory management
     rm -rf "$WORKDIR"
-    mkdir -p "$WORKDIR"
-    export SHED_FAKEROOT="${WORKDIR}/fakeroot"
+    mkdir "$WORKDIR"
+    export SHED_FAKEROOT="$SHDPKG_FAKEROOT"
 
     # Source acquisition and unpacking
     shed_fetch_source "$WORKDIR" || return 21
-    if $KEEPSOURCE && [ ! -d "$SRCCACHEDIR" ]; then
+    if $SHOULDCACHESOURCE && [ ! -d "$SRCCACHEDIR" ]; then
         mkdir "$SRCCACHEDIR"
     fi
     cd "$WORKDIR"
     if [ -n "$SRC" ]; then
         if [ "${SRC: -4}" = '.git' ]; then
             # Source is a git repository
-            if $KEEPSOURCE; then
+            if $SHOULDCACHESOURCE; then
                 cp -R "${NAME}-git" "$SRCCACHEDIR"
             fi
         else 
             # Source is an archive or other file
-            if $KEEPSOURCE; then
+            if $SHOULDCACHESOURCE; then
                 cp "$SRCFILE" "$SRCCACHEDIR"
             fi
             # Unarchive Source
@@ -769,7 +788,7 @@ shed_build () {
     if ! $VERBOSE; then
         echo -n "Building '$NAME' ($SHED_VERSION_TUPLE)..."
     fi
-    mkdir "${SHED_FAKEROOT}"
+    mkdir "$SHDPKG_FAKEROOT"
     if [ -a "${SHED_PKGDIR}/build.sh" ]; then
         shed_run_script "${SHED_PKGDIR}/build.sh"
     else
@@ -802,16 +821,37 @@ shed_build () {
     fi
 
     # Archive Build Product
-    if [ ! -d "$BINCACHEDIR" ]; then
-        mkdir "$BINCACHEDIR"
+    if $SHOULDCACHEBINARY; then
+        if [ ! -d "$BINCACHEDIR" ]; then
+            mkdir "$BINCACHEDIR"
+        fi
+        echo -n "Creating binary archive $(shed_binary_archive_name)..."
+        tar caf "${BINCACHEDIR}/$(shed_binary_archive_name)" -C "$SHED_FAKEROOT" . || return 24
+        echo 'done'
     fi
-    echo -n "Creating binary archive $(shed_binary_archive_name)..."
-    tar -caf "${BINCACHEDIR}/$(shed_binary_archive_name)" -C "$SHED_FAKEROOT" . || return 24
-    echo 'done'
 
     # Delete Temporary Files
     cd "$TMPDIR"
-    rm -rf "$WORKDIR"
+    if $SHOULDCLEANTEMP; then
+        rm -rf "$WORKDIR"
+    fi
+}
+
+# $1 - Binary archive directory
+shed_fetch_binary () {
+    if [ ! -r "${1}/$(shed_binary_archive_name)" ]; then
+        if [ -n "$BIN" ]; then
+            if [ ! -d "$1" ]; then
+                mkdir -p "$1" || return 1
+            fi
+            # Download from the URL specified by BIN
+            local BINURL=$(eval echo "$BIN")
+            shed_download_file "$BINURL" "$(shed_binary_archive_name)" "$1"
+            # TO-DO download accompanying MD5 file and verify
+        else
+            echo "No binary archive URL has been supplied for '$NAME'"
+        fi
+    fi
 }
 
 # Returns:
@@ -862,16 +902,13 @@ shed_install () {
             fi
             if ! $VERBOSE; then echo 'done'; fi
         else
-            BINARCHIVE="${BINCACHEDIR}/$(shed_binary_archive_name)"
-            if [ ! -r "$BINARCHIVE" ]; then
-                if [ -n "$BIN" ]; then
-                    # Download from the URL specified by BIN
-                    local BINURL=$(eval echo "$BIN")
-                    shed_download_file "$BINURL" "$(shed_binary_archive_name)" "$BINCACHEDIR"
-                fi
+            local BINARCHIVE="${BINCACHEDIR}/$(shed_binary_archive_name)"
+            if [ ! -d "$SHDPKG_FAKEROOT" ]; then
+                # Attempt to download a binary archive
+                shed_fetch_binary "$BINCACHEDIR" || return 33
                 if [ ! -r "$BINARCHIVE" ]; then
                     # Or, failing that, build it from scratch
-                    shedmake build "${SHED_PKGDIR}" "${PARSEDARGS[@]}"
+                    shedmake build "${SHED_PKGDIR}" "${PARSEDARGS[@]}" --retain-temp
                     local BUILDRETVAL=$?
                     if [ $BUILDRETVAL -ne 0 ]; then
                         echo "Unable to produce or obtain binary archive: $(shed_binary_archive_name)"
@@ -879,13 +916,16 @@ shed_install () {
                     fi
                 fi
             fi
-            if [ -r "$BINARCHIVE" ]; then
-                echo -n "Installing files from binary archive $(shed_binary_archive_name)..."
+            if [ -d "$SHDPKG_FAKEROOT" ]; then
+                # Install directly from fakeroot
+                echo -n "Installing files from ${SHDPKG_FAKEROOT}..."
+                tar cf - -C "$SHDPKG_FAKEROOT" . | tar xvhf - -C "$SHED_INSTALLROOT" > "$SHED_INSTALL_BOM" || return 34
+                echo 'done'
+            elif [ -r "$BINARCHIVE" ]; then
+                # Install from binary archive
+                echo -n "Installing files from $(shed_binary_archive_name)..."
                 tar xvhf "$BINARCHIVE" -C "$SHED_INSTALLROOT" > "$SHED_INSTALL_BOM" || return 34
                 echo 'done'
-                if ! $KEEPBINARY; then
-                    rm "$BINARCHIVE"
-                fi
             else 
                 return 33
             fi
@@ -921,6 +961,12 @@ shed_install () {
     # Purge Old Files
     if $SHOULDPURGE && [ -n "$SHED_INSTALLED_VERSION_TUPLE" ]; then
         shed_purge "$SHED_VERSION_TUPLE" "$SHED_INSTALLED_VERSION_TUPLE"
+    fi
+
+    # Delete Temporary Files
+    cd "$TMPDIR"
+    if $SHOULDCLEANTEMP; then
+        rm -rf "$WORKDIR"
     fi
 
     echo "Successfully installed '$NAME' ($SHED_VERSION_TUPLE)"
@@ -1253,6 +1299,16 @@ shed_command () {
                     shed_create_repo "$CREATENAME"
                     ;;
             esac
+            ;;
+        fetch-binary|fetch-binary-list)
+            if [ $# -lt 1 ]; then
+                shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
+                return 1
+            fi
+            shed_read_package_meta "$1" && \
+            shift && \
+            shed_parse_args "$@" && \
+            shed_fetch_binary "$BINCACHEDIR"
             ;;
         fetch-source|fetch-source-list)
             if [ $# -lt 1 ]; then

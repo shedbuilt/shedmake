@@ -1,5 +1,5 @@
-KEEP_SRC=no
-KEEP_BIN=no
+CACHE_SRC=no
+CACHE_BIN=no
 NUM_JOBS=4
 COMPRESSION=xz
 TMP_DIR=/var/tmp/shedmake
