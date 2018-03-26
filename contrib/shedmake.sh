@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.9.6
+SHEDMAKEVER=0.9.7
 CFGFILE=/etc/shedmake.conf
 
 shed_parse_yes_no () {
@@ -99,8 +99,8 @@ shed_load_defaults () {
     VERBOSE=false
     FORCEACTION=false
     SHOULDCLEANTEMP=true
-    SHOULDCACHESOURCE="$DEFAULT_CACHESOURCE"
-    SHOULDCACHEBINARY="$DEFAULT_CACHEBINARY"
+    SHOULDCACHESOURCE=false
+    SHOULDCACHEBINARY=false
     SHOULDIGNOREDEPS=false
     SHOULDINSTALLDEPS=false
     SHOULDPREINSTALL=true
@@ -129,6 +129,14 @@ shed_parse_args () {
         shift
         # Check for unary options
         case "$OPTION" in
+            -c|--cache-source)
+                SHOULDCACHESOURCE=true
+                continue
+                ;;
+            -C|--cache-binary)
+                SHOULDCACHEBINARY=true
+                continue
+                ;;
             -f|--force)
                 FORCEACTION=true
                 continue
@@ -401,7 +409,7 @@ shed_package_info () {
 }
 
 # Returns:
-#     0 - All dependencies successfully resolved
+#     0 - All hard dependencies successfully resolved
 #   1-9 - File location or format error
 # 10-19 - Package status error
 # 20-29 - Package build error
@@ -458,10 +466,15 @@ shed_resolve_dependencies () {
                         if $ISHARDDEP; then
                             DEP_RESOLVE_RETVAL=$DEP_RETVAL
                             break
-                        # this fails because dependency of is empty and dep is harfbuzz
-                        elif [ $DEP_RETVAL -eq 40 ] && $CANDEFER; then
-                            echo "Deferring resolution of soft circular dependency '$DEP'."
-                            DEFERREDDEPS+=( "$DEP" )
+                        elif [ $DEP_RETVAL -eq 40 ]; then
+                            if $CANDEFER; then
+                                echo "Deferring resolution of soft circular dependency '$DEP'"
+                                DEFERREDDEPS+=( "$DEP" )
+                            else
+                                echo "Ignoring unresolved, soft circular dependency '$DEP'"
+                            fi
+                        else
+                            echo "Ignoring unresolved soft dependency '$DEP'"
                         fi
                     fi
                 ;;
