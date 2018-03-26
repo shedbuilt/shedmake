@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.9.7
+SHEDMAKEVER=0.9.8
 CFGFILE=/etc/shedmake.conf
 
 shed_parse_yes_no () {
@@ -189,7 +189,7 @@ shed_parse_args () {
             -b|--branch)
                 REPOBRANCH="$OPTVAL"
                 ;;
-            -B|--binary-cache)
+            -B|--binary-dir)
                 BINCACHEDIR="$OPTVAL"
                 ;;
             -d|--device)
@@ -230,7 +230,7 @@ shed_parse_args () {
                     return 1
                 fi
                 ;;
-            -S|--source-cache)
+            -S|--source-dir)
                 SRCCACHEDIR="$OPTVAL"
                 ;;
             -t|--target)
@@ -964,7 +964,7 @@ shed_install () {
     fi
 
     # Sort Install Log
-    sort "$SHED_INSTALL_BOM" -o "$SHED_INSTALL_BOM"
+    LC_ALL=C sort "$SHED_INSTALL_BOM" -o "$SHED_INSTALL_BOM"
 
     # Record Installation
     if [ "$SHED_VERSION_TUPLE" != "$SHED_INSTALLED_VERSION_TUPLE" ]; then
