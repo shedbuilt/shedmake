@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.9.8
+SHEDMAKEVER=0.9.9
 CFGFILE=/etc/shedmake.conf
 
 shed_parse_yes_no () {
@@ -1248,7 +1248,7 @@ shed_command () {
                 return 1
             fi
             REPOURL="$1"; shift
-            local ADDTOREPO="$2"; shift
+            local ADDTOREPO="$1"; shift
             shed_parse_args "$@" && \
             shed_add "$ADDTOREPO"
             ;;
