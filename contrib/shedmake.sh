@@ -599,11 +599,6 @@ shed_run_chroot_script () {
     PS1='\u:\w\$ '              \
     PATH=/bin:/usr/bin:/sbin:/usr/sbin \
     SHED_DEVICE="$SHED_DEVICE" \
-    SHED_NUM_JOBS="$SHED_NUM_JOBS" \
-    SHED_PKG_DIR="$2" \
-    SHED_PKG_CONTRIB_DIR="${2}/contrib" \
-    SHED_PATCHDIR="${2}/patch" \
-    SHED_PKG_LOG_DIR="${2}/install" \
     SHED_RELEASE="$SHED_RELEASE" \
     SHED_BUILD_MODE="$SHED_BUILD_MODE" \
     SHED_BUILD_HOST="$SHED_BUILD_HOST" \
@@ -611,8 +606,18 @@ shed_run_chroot_script () {
     SHED_NATIVE_TARGET="$SHED_NATIVE_TARGET" \
     SHED_TOOLCHAIN_TARGET="$SHED_TOOLCHAIN_TARGET" \
     SHED_INSTALL_ROOT='/' \
+    SHED_NUM_JOBS="$SHED_NUM_JOBS" \
+    SHED_PKG_DIR="$2" \
+    SHED_PKG_CONTRIB_DIR="${2}/contrib" \
+    SHED_PKG_PATCH_DIR="${2}/patch" \
+    SHED_PKG_LOG_DIR="${2}/install" \
+    SHED_PKG_NAME="$SHED_PKG_NAME" \
+    SHED_PKG_VERSION="$SHED_PKG_VERSION" \
+    SHED_PKG_REVISION="$SHED_PKG_REVISION" \
     SHED_PKG_VERSION_TUPLE="$SHED_PKG_VERSION_TUPLE" \
     SHED_PKG_INSTALL_BOM="${2}/install/${SHED_PKG_VERSION_TUPLE}.bom" \
+    SHED_PKG_INSTALL_LOG="$SHED_PKG_INSTALL_LOG" \
+    SHED_PKG_INSTALLED_VERSION_TUPLE="$SHED_PKG_INSTALLED_VERSION_TUPLE" \
     bash "${2}/${3}" 1>&3 2>&4
 }
 
