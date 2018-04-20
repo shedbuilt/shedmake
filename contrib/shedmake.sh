@@ -3,24 +3,31 @@
 # Shedmake: A trivial package manager for Shedbuilt GNU/Linux
 # Copyright 2018 Auston Stewart
 
-# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and 
-# associated documentation files (the "Software"), to deal in the Software without restriction, including 
-# without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
-# copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to 
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+# associated documentation files (the "Software"), to deal in the Software without restriction, including
+# without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to
 # the following conditions:
 
-# The above copyright notice and this permission notice shall be included in all copies or substantial 
+# The above copyright notice and this permission notice shall be included in all copies or substantial
 # portions of the Software.
 
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT 
-# LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN 
-# NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, 
-# WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+# LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+# NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+# WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=0.9.9
+SHEDMAKEVER=0.9.10
 CFGFILE=/etc/shedmake.conf
+
+shed_cleanup () {
+    if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
+        cd "$TMPDIR"
+        rm -rf "$WORKDIR"
+    fi
+}
 
 shed_parse_yes_no () {
     case "$1" in
@@ -60,7 +67,7 @@ shed_set_binary_archive_compression () {
 shed_set_output_verbosity () {
     if $1; then
         exec 3>&1 4>&2
-    else 
+    else
         exec 3>/dev/null 4>/dev/null
     fi
 }
@@ -161,7 +168,7 @@ shed_parse_args () {
                 SHOULDINSTALL=false
                 continue
                 ;;
-            -r|--retain-temp)
+            -R|--retain-temp)
                 SHOULDCLEANTEMP=false
                 continue
                 ;;
@@ -321,7 +328,7 @@ shed_read_package_meta () {
     export SHED_VERSION_TUPLE="${VERSION}-${REVISION}"
     export SHED_INSTALL_BOM="${SHED_LOGDIR}/${SHED_VERSION_TUPLE}.bom"
     WORKDIR="${TMPDIR%/}/${NAME}_${SHED_VERSION_TUPLE}"
-    export SHDPKG_FAKEROOT="${WORKDIR}/fakeroot"
+    export SHED_FAKEROOT="${WORKDIR}/fakeroot"
     SRC=$(sed -n 's/^SRC=//p' ${PKGMETAFILE})
     SRCFILE=$(sed -n 's/^SRCFILE=//p' ${PKGMETAFILE})
     if [ -z "$SRCFILE" ] && [ -n "$SRC" ]; then
@@ -452,7 +459,7 @@ shed_resolve_dependencies () {
                             -D|--dependency-of)
                                 IGNOREARG=true
                                 ;&
-                            -f|--force)
+                            -f|--force|-R|--retain-temp)
                                 continue
                                 ;;
                             *)
@@ -717,7 +724,7 @@ shed_fetch_source () {
             git checkout --quiet FETCH_HEAD 1>&3 2>&4 || return 1
             if ! $VERBOSE; then echo 'done'; fi
             # TODO: Use signature for verification
-        else 
+        else
             # Source is an archive
             if [ ! -r "${1}/${SRCFILE}" ]; then
                 if [ ! -r "${SRCCACHEDIR}/${SRCFILE}" ]; then
@@ -760,7 +767,6 @@ shed_build () {
     # Work directory management
     rm -rf "$WORKDIR"
     mkdir "$WORKDIR"
-    export SHED_FAKEROOT="$SHDPKG_FAKEROOT"
 
     # Source acquisition and unpacking
     shed_fetch_source "$WORKDIR" || return 21
@@ -774,7 +780,7 @@ shed_build () {
             if $SHOULDCACHESOURCE; then
                 cp -R "${NAME}-git" "$SRCCACHEDIR"
             fi
-        else 
+        else
             # Source is an archive or other file
             if $SHOULDCACHESOURCE; then
                 cp "$SRCFILE" "$SRCCACHEDIR"
@@ -784,7 +790,7 @@ shed_build () {
         fi
     fi
 
-    # Determine Source Root Dir    
+    # Determine Source Root Dir
     SRCDIR=$(ls -d */ 2>/dev/null)
     if [ $? -eq 0 ]; then
         if [ -d "$SRCDIR" ]; then
@@ -801,7 +807,7 @@ shed_build () {
     if ! $VERBOSE; then
         echo -n "Building '$NAME' ($SHED_VERSION_TUPLE)..."
     fi
-    mkdir "$SHDPKG_FAKEROOT"
+    mkdir "$SHED_FAKEROOT"
     if [ -a "${SHED_PKGDIR}/build.sh" ]; then
         shed_run_script "${SHED_PKGDIR}/build.sh"
     else
@@ -844,9 +850,8 @@ shed_build () {
     fi
 
     # Delete Temporary Files
-    cd "$TMPDIR"
     if $SHOULDCLEANTEMP; then
-        rm -rf "$WORKDIR"
+        shed_cleanup
     fi
 }
 
@@ -916,7 +921,7 @@ shed_install () {
             if ! $VERBOSE; then echo 'done'; fi
         else
             local BINARCHIVE="${BINCACHEDIR}/$(shed_binary_archive_name)"
-            if [ ! -d "$SHDPKG_FAKEROOT" ]; then
+            if [ ! -d "$SHED_FAKEROOT" ]; then
                 # Attempt to download a binary archive
                 shed_fetch_binary "$BINCACHEDIR" || return 33
                 if [ ! -r "$BINARCHIVE" ]; then
@@ -929,17 +934,17 @@ shed_install () {
                     fi
                 fi
             fi
-            if [ -d "$SHDPKG_FAKEROOT" ]; then
+            if [ -d "$SHED_FAKEROOT" ]; then
                 # Install directly from fakeroot
-                echo -n "Installing files from ${SHDPKG_FAKEROOT}..."
-                tar cf - -C "$SHDPKG_FAKEROOT" . | tar xvhf - -C "$SHED_INSTALLROOT" > "$SHED_INSTALL_BOM" || return 34
+                echo -n "Installing files from ${SHED_FAKEROOT}..."
+                tar cf - -C "$SHED_FAKEROOT" . | tar xvhf - -C "$SHED_INSTALLROOT" > "$SHED_INSTALL_BOM" || return 34
                 echo 'done'
             elif [ -r "$BINARCHIVE" ]; then
                 # Install from binary archive
                 echo -n "Installing files from $(shed_binary_archive_name)..."
                 tar xvhf "$BINARCHIVE" -C "$SHED_INSTALLROOT" > "$SHED_INSTALL_BOM" || return 34
                 echo 'done'
-            else 
+            else
                 return 33
             fi
         fi
@@ -977,9 +982,8 @@ shed_install () {
     fi
 
     # Delete Temporary Files
-    cd "$TMPDIR"
     if $SHOULDCLEANTEMP; then
-        rm -rf "$WORKDIR"
+        shed_cleanup
     fi
 
     echo "Successfully installed '$NAME' ($SHED_VERSION_TUPLE)"
@@ -1505,6 +1509,9 @@ shed_command () {
             ;;
     esac
 }
+
+# Trap signals
+trap shed_cleanup SIGINT SIGTERM
 
 # Check for -list action prefix
 if [ $# -gt 0 ] && [ "${1: -5}" = '-list' ]; then
