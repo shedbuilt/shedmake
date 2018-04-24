@@ -1,0 +1,12 @@
+NUM_JOBS=4
+COMPRESSION=xz
+TMP_DIR=/var/tmp/shedmake
+REMOTE_REPO_DIR=/var/shedmake/repos/remote
+LOCAL_REPO_DIR=/var/shedmake/repos/local
+TEMPLATE_DIR=/var/shedmake/template
+RELEASE=amano
+DEVICE=nanopi-k1-plus
+CPU_CORE=cortex-a53
+CPU_FEATURES=crypto
+NATIVE_TARGET=aarch64-unknown-linux-gnu
+TOOLCHAIN_TARGET=aarch64-shedstrap-linux-gnu

@@ -22,6 +22,13 @@
 SHEDMAKEVER=1.0.0
 CFGFILE=/etc/shedmake.conf
 
+shed_cleanup () {
+    if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
+        cd "$TMPDIR"
+        rm -rf "$WORKDIR"
+    fi
+}
+
 shed_parse_yes_no () {
     case "$1" in
         yes) echo 'true';;
@@ -457,7 +464,7 @@ shed_resolve_dependencies () {
                             -D|--dependency-of)
                                 IGNOREARG=true
                                 ;&
-                            -f|--force)
+                            -f|--force|-R|--retain-temp)
                                 continue
                                 ;;
                             *)
@@ -810,6 +817,7 @@ shed_build () {
     if ! $VERBOSE; then
         echo -n "Building '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TUPLE)..."
     fi
+
     mkdir "$SHED_FAKE_ROOT"
     if [ -a "${SHED_PKG_DIR}/build.sh" ]; then
         shed_run_script "${SHED_PKG_DIR}/build.sh"
@@ -853,9 +861,8 @@ shed_build () {
     fi
 
     # Delete Temporary Files
-    cd "$TMPDIR"
     if $SHOULDCLEANTEMP; then
-        rm -rf "$WORKDIR"
+        shed_cleanup
     fi
 }
 
@@ -986,9 +993,8 @@ shed_install () {
     fi
 
     # Delete Temporary Files
-    cd "$TMPDIR"
     if $SHOULDCLEANTEMP; then
-        rm -rf "$WORKDIR"
+        shed_cleanup
     fi
 
     echo "Successfully installed '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TUPLE)"
@@ -1514,6 +1520,9 @@ shed_command () {
             ;;
     esac
 }
+
+# Trap signals
+trap shed_cleanup SIGINT SIGTERM
 
 # Check for -list action prefix
 if [ $# -gt 0 ] && [ "${1: -5}" = '-list' ]; then
