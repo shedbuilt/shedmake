@@ -95,8 +95,7 @@ shed_load_config () {
     DEFAULT_COMPRESSION="$(sed -n 's/^COMPRESSION=//p' $CFGFILE)"
     DEFAULT_NUMJOBS="$(sed -n 's/^NUM_JOBS=//p' $CFGFILE)"
     DEFAULT_DEVICE="$(sed -n 's/^DEVICE=//p' $CFGFILE)"
-    read -ra SHED_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' $CFGFILE)
-    export SHED_OPTIONS
+    read -ra DEFAULT_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' $CFGFILE)
     export SHED_RELEASE="$(sed -n 's/^RELEASE=//p' $CFGFILE)"
     export SHED_CPU_CORE="$(sed -n 's/^CPU_CORE=//p' $CFGFILE)"
     export SHED_CPU_FEATURES="$(sed -n 's/^CPU_FEATURES=//p' $CFGFILE)"
@@ -118,11 +117,13 @@ shed_load_defaults () {
     SHOULD_PURGE=false
     SHOULD_STRIP=true
     SHOULD_REQUIRE_ROOT=false
+    DEFERRED_DEPS=( )
     export SHED_BUILD_TARGET='native'
     export SHED_BUILD_HOST='native'
     export SHED_INSTALL_ROOT='/'
     export SHED_NUM_JOBS="$DEFAULT_NUMJOBS"
     export SHED_DEVICE="$DEFAULT_DEVICE"
+    export SHED_OPTIONS="${DEFAULT_OPTIONS[@]}"
     REPO_BRANCH="$SHED_RELEASE"
     shed_set_binary_archive_compression "$DEFAULT_COMPRESSION"
     shed_set_output_verbosity $VERBOSE
@@ -172,38 +173,6 @@ shed_locate_repo () {
     else
         echo $REPODIR
     fi
-}
-
-shed_intersect_options () {
-    declare -A TEMP_OPTIONS
-    declare -gax SHED_PKG_OPTIONS
-    local OPTION
-    for OPTION in ${SELECTED_OPTIONS[@]}; do
-        local OPTION_VALUE="${PACKAGE_OPTIONS[$OPTION]}"
-        local OPTION_TO_ADD="$OPTION"
-        local SUBOPTION
-        if [ -z "$OPTION_VALUE" ]; then
-            continue
-        fi
-        for SUBOPTION in $(IFS='|'; echo $OPTION_VALUE); do
-            if [ -n "$SUBOPTION" ]; then
-                if [ -n "${TEMP_OPTIONS[$SUBOPTION]}" ]; then
-                    OPTION_TO_ADD=''
-                    break
-                fi
-            fi
-        done
-        if [ -n "$OPTION_TO_ADD" ]; then
-            TEMP_OPTIONS[$OPTION_TO_ADD]=$OPTION_TO_ADD
-        fi
-    done
-    SHED_PKG_OPTIONS=( ${!TEMP_OPTIONS[@]} )
-    local SORTED_OPTIONS=($(for OPTION in ${SHED_PKG_OPTIONS[@]}; do echo $OPTION; done | LC_ALL=C sort))
-    local DELIMITED_SORTED_OPTIONS=$(echo "${SORTED_OPTIONS[@]}" | sed 's/ /-/g')
-    if [ -z "$DELIMITED_SORTED_OPTIONS" ]; then
-        DELIMITED_SORTED_OPTIONS='none'
-    fi
-    export SHED_PKG_VERSION_TRIPLET="${SHED_PKG_VERSION}-${SHED_PKG_REVISION}-${DELIMITED_SORTED_OPTIONS}"
 }
 
 shed_parse_args () {
@@ -302,12 +271,11 @@ shed_parse_args () {
                 SHED_BUILD_HOST="$OPTVAL"
                 ;;
             -o|--options)
-                if OVERRIDE_OPTIONS; then
+                if ! OVERRIDE_OPTIONS; then
                     OVERRIDE_OPTIONS=true
-                    unset SELECTED_OPTIONS
-                    declare -ga SELECTED_OPTIONS=( "$OPTVAL" )
+                    SHED_OPTIONS=( "$OPTVAL" )
                 else
-                    SELECTED_OPTIONS+=( "$OPTVAL" )
+                    SHED_OPTIONS+=( "$OPTVAL" )
                 fi
                 ALLOW_OPTVAL=true
                 ;;
@@ -350,6 +318,94 @@ shed_parse_args () {
         esac
 
     done
+}
+
+shed_configure_options () {
+    declare -gA PACKAGE_OPTIONS_MAP
+    declare -A TEMP_PACKAGE_OPTIONS
+    declare -A TEMP_SUPPORTED_OPTIONS
+    declare -a TEMP_SELECTED_OPTIONS
+    local OPTION
+
+    # Populate temporary package options map
+    for OPTION in ${DEFAULT_PACKAGE_OPTIONS[@]}; do
+        TEMP_PACKAGE_OPTIONS["$OPTION"]="$OPTION"
+    done
+
+    # Process user-chosen options and exclusions
+    for OPTION in ${SHED_OPTIONS[@]}; do
+        if [ "${OPTION:0:1}" == '!' ]; then
+            unset TEMP_PACKAGE_OPTIONS["${OPTION:1}"]
+        else
+            TEMP_SELECTED_OPTIONS+=( "$OPTION" )
+        fi
+    done
+
+    # Append default package options
+    for OPTION in ${!TEMP_PACKAGE_OPTIONS[@]}; do
+        TEMP_SELECTED_OPTIONS+=( "$OPTION" )
+    done
+
+    # Populate temporary supported package options map
+    for OPTION in ${SUPPORTED_PACKAGE_OPTIONS[@]}; do
+        if [ ${#OPTION} -gt 2 ] && [ "${OPTION:0:1}" == '(' ] && [ "${OPTION: -1}" == ')' ]; then
+            OPTION="${OPTION:1:$(expr ${#OPTION} - 2)}"
+        fi
+        local SUBOPTION
+        for SUBOPTION in ${OPTION//|/ }; do
+            TEMP_SUPPORTED_OPTIONS["$SUBOPTION"]="$OPTION"
+        done
+    done
+
+    # Intersect desired and supported options
+    for OPTION in ${TEMP_SELECTED_OPTIONS[@]}; do
+        local OPTION_VALUE="${TEMP_SUPPORTED_OPTIONS[$OPTION]}"
+        local OPTION_TO_ADD="$OPTION"
+        local SUBOPTION
+        if [ -z "$OPTION_VALUE" ]; then
+            continue
+        fi
+        for SUBOPTION in ${OPTION_VALUE//|/ }; do
+            if [ -n "${PACKAGE_OPTIONS_MAP[$SUBOPTION]}" ]; then
+                OPTION_TO_ADD=''
+                break
+            fi
+        done
+        if [ -n "$OPTION_TO_ADD" ]; then
+            PACKAGE_OPTIONS_MAP[$OPTION_TO_ADD]=$OPTION_TO_ADD
+        fi
+    done
+
+    # Validate options
+    local OPTION_SATISFIED
+    for OPTION in ${SUPPORTED_PACKAGE_OPTIONS[@]}; do
+        if [ ${#OPTION} -gt 2 ] && [ "${OPTION:0:1}" == '(' ] && [ "${OPTION: -1}" == ')' ]; then
+            continue
+        else
+            OPTION_SATISFIED=false
+            local SUBOPTION
+            for SUBOPTION in ${OPTION//|/ }; do
+                if [ -n "${PACKAGE_OPTIONS_MAP[$SUBOPTION]}" ]; then
+                    OPTION_SATISFIED=true
+                    break
+                fi
+            done
+            if ! $OPTION_SATISFIED; then
+                echo "Unable to configure build due to missing required option: $OPTION"
+                return 1
+            fi
+        fi
+    done
+
+    export SHED_PKG_OPTIONS="${!PACKAGE_OPTIONS_MAP[@]}"
+    local SORTED_OPTIONS=($(for OPTION in ${SHED_PKG_OPTIONS[@]}; do echo $OPTION; done | LC_ALL=C sort))
+    local DELIMITED_SORTED_OPTIONS="${SORTED_OPTIONS[@]}"
+    if [ -n "$DELIMITED_SORTED_OPTIONS" ]; then
+        DELIMITED_SORTED_OPTIONS="${DELIMITED_SORTED_OPTIONS// /-}"
+    else
+        DELIMITED_SORTED_OPTIONS='none'
+    fi
+    export SHED_PKG_VERSION_TRIPLET="${SHED_PKG_VERSION}-${SHED_PKG_REVISION}-${DELIMITED_SORTED_OPTIONS}"
 }
 
 shed_read_package_meta () {
@@ -403,27 +459,13 @@ shed_read_package_meta () {
     read -ra LICENSE <<< $(sed -n 's/^LICENSE=//p' ${PKGMETAFILE})
 
     # Parse dependencies
-    read -ra BUILDDEPS <<< $(sed -n 's/^BUILDDEPS=//p' ${PKGMETAFILE})
-    read -ra INSTALLDEPS <<< $(sed -n 's/^INSTALLDEPS=//p' ${PKGMETAFILE})
-    read -ra RUNDEPS <<< $(sed -n 's/^RUNDEPS=//p' ${PKGMETAFILE})
-    DEFERREDDEPS=( )
+    read -ra BUILD_DEPS <<< $(sed -n 's/^BUILD_DEPS=//p' ${PKGMETAFILE})
+    read -ra INSTALL_DEPS <<< $(sed -n 's/^INSTALL_DEPS=//p' ${PKGMETAFILE})
+    read -ra RUN_DEPS <<< $(sed -n 's/^RUN_DEPS=//p' ${PKGMETAFILE})
 
     #Parse package options
-    read -ra SUPPORTED_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' ${PKGMETAFILE})
-    declare -gA PACKAGE_OPTIONS
-    local OPTION
-    for OPTION in ${SUPPORTED_OPTIONS[@]}; do
-        local SUBOPTION
-        for SUBOPTION in $(IFS='|'; echo $OPTION); do
-            if [ -n "$SUBOPTION" ]; then
-                PACKAGE_OPTIONS[$SUBOPTION]=$OPTION
-            else
-                PACKAGE_OPTIONS[$OPTION]=$OPTION
-            fi
-        done
-    done
-    read -ra DEFAULTS <<< $(sed -n 's/^DEFAULTS=//p' ${PKGMETAFILE})
-    SELECTED_OPTIONS=( "${SHED_OPTIONS[@]}" "${DEFAULTS[@]}" )
+    read -ra SUPPORTED_PACKAGE_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' ${PKGMETAFILE})
+    read -ra DEFAULT_PACKAGE_OPTIONS <<< $(sed -n 's/^DEFAULTS=//p' ${PKGMETAFILE})
 
     export SHED_INSTALL_HISTORY="${SHED_PKG_LOG_DIR}/install.log"
     export SHED_PKG_INSTALLED_VERSION_TRIPLET=''
@@ -458,14 +500,14 @@ shed_package_info () {
     if [ -n "$LICENSE" ]; then
         echo "License(s):		${LICENSE[@]}"
     fi
-    if [ -n "$BUILDDEPS" ]; then
-        echo "Build Dependencies:	${BUILDDEPS[@]}"
+    if [ -n "$BUILD_DEPS" ]; then
+        echo "Build Dependencies:	${BUILD_DEPS[@]}"
     fi
-    if [ -n "$INSTALLDEPS" ]; then
-        echo "Install Dependencies:	${INSTALLDEPS[@]}"
+    if [ -n "$INSTALL_DEPS" ]; then
+        echo "Install Dependencies:	${INSTALL_DEPS[@]}"
     fi
-    if [ -n "$RUNDEPS" ]; then
-        echo "Runtime Dependencies:	${RUNDEPS[@]}"
+    if [ -n "$RUN_DEPS" ]; then
+        echo "Runtime Dependencies:	${RUN_DEPS[@]}"
     fi
     if [ -n "$SHED_PKG_INSTALLED_VERSION_TRIPLET" ]; then
         echo "Installed Version:	$SHED_PKG_INSTALLED_VERSION_TRIPLET"
@@ -496,7 +538,8 @@ shed_package_info () {
 # 30-39 - Package install error
 #    40 - Unmet circular dependency error
 shed_resolve_dependencies () {
-    local -n DEPS=$1
+    local -n UNPROCESSED_DEPS=$1
+    declare -a DEPS
     local DEPTYPE=$2
     local INSTALLACTION=$3
     local CANDEFER=$4
@@ -504,7 +547,22 @@ shed_resolve_dependencies () {
     local DEP
     local DEP_RESOLVE_RETVAL=0
     local DEP_RETVAL=0
+    local DEP_TO_ADD
+    local DEP_COMPONENT
     if ! $SHOULD_IGNORE_DEPS && [ ${#DEPS[@]} -gt 0 ]; then
+        for DEP in "${UNPROCESSED_DEPS[@]}"; do
+            DEP_TO_ADD=''
+            for DEP_COMPONENT in ${DEP//:/ }; do
+                if [ -n "$DEP_TO_ADD" ] && [ -z "${PACKAGE_OPTIONS_MAP[$DEP_TO_ADD]}" ]; then
+                    DEP_TO_ADD=''
+                    break
+                fi
+                DEP_TO_ADD=$DEP_COMPONENT
+            done
+            if [ -n "$DEP_TO_ADD" ]; then
+                DEPS+=( "$DEP_TO_ADD" )
+            fi
+        done
         if $SHOULD_INSTALL_DEPS; then
             DEPACTION="$INSTALLACTION"
         fi
@@ -549,7 +607,7 @@ shed_resolve_dependencies () {
                         elif [ $DEP_RETVAL -eq 40 ]; then
                             if $CANDEFER; then
                                 echo "Deferring resolution of soft circular dependency '$DEP'"
-                                DEFERREDDEPS+=( "$DEP" )
+                                DEFERRED_DEPS+=( "$DEP" )
                             else
                                 echo "Ignoring unresolved, soft circular dependency '$DEP'"
                             fi
@@ -1184,9 +1242,9 @@ shed_repo_status_at_path () {
         if [ ! -d "$PACKAGE" ]; then
             continue
         fi
-        shed_read_package_meta "$PACKAGE" || continue
-        shed_package_status 1>&3 2>&4 &&
-        shed_intersect_options
+        shed_read_package_meta "$PACKAGE" &&
+        shed_configure_options || exit 1
+        shed_package_status 1>&3 2>&4
         PKGSTATUS=$?
         if [ "$PKGSTATUS" -ne 11 ]; then
             ((++NUMINSTALLED))
@@ -1355,8 +1413,8 @@ shed_command () {
             shift &&
             shed_parse_args "$@" &&
             echo "Shedmake is preparing to build '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET)..." &&
-            shed_intersect_options &&
-            shed_resolve_dependencies BUILDDEPS 'build' 'install' 'false' &&
+            shed_configure_options &&
+            shed_resolve_dependencies BUILD_DEPS 'build' 'install' 'false' &&
             shed_build
             ;;
         clean|clean-list)
@@ -1427,7 +1485,7 @@ shed_command () {
             shed_read_package_meta "$1" &&
             shift &&
             shed_parse_args "$@" &&
-            shed_intersect_options &&
+            shed_configure_options &&
             shed_package_info
             ;;
         install|install-list|upgrade|upgrade-list)
@@ -1482,16 +1540,16 @@ shed_command () {
                     echo "Shedmake is preparing to upgrade '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET) on ${SHED_INSTALL_ROOT}..."
                     ;;
             esac
-            shed_intersect_options &&
-            shed_resolve_dependencies INSTALLDEPS "$DEP_CMD_ACTION" "$DEP_CMD_ACTION" 'true' &&
+            shed_configure_options &&
+            shed_resolve_dependencies INSTALL_DEPS "$DEP_CMD_ACTION" "$DEP_CMD_ACTION" 'true' &&
             shed_install &&
-            shed_resolve_dependencies DEFERREDDEPS 'deferred' "$DEP_CMD_ACTION" 'false' || return $?
-            if [ ${#DEFERREDDEPS[@]} -gt 0 ]; then
+            shed_resolve_dependencies DEFERRED_DEPS 'deferred' "$DEP_CMD_ACTION" 'false' || return $?
+            if [ ${#DEFERRED_DEPS[@]} -gt 0 ]; then
                 echo "Shedmake will re-install '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET) for deferred dependencies..."
                 shed_clean &&
                 shed_install || return $?
             fi
-            shed_resolve_dependencies RUNDEPS 'runtime' "$DEP_CMD_ACTION" 'false'
+            shed_resolve_dependencies RUN_DEPS 'runtime' "$DEP_CMD_ACTION" 'false'
             ;;
         purge|purge-list|uninstall|uninstall-list)
             if [ $# -lt 1 ]; then
@@ -1557,7 +1615,7 @@ shed_command () {
                 return 1
             fi
             shed_read_package_meta "$1" &&
-            shed_intersect_options &&
+            shed_configure_options &&
             shed_package_status
             ;;
         update-repo|update-repo-list)
