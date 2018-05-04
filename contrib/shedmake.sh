@@ -20,7 +20,7 @@
 
 # Shedmake Defines
 SHEDMAKEVER=1.0.0
-CFGFILE=/home/auston/Projects/Shedbuilt/blank/shedmake.conf
+CFGFILE=/etc/shedmake.conf
 
 shed_cleanup () {
     if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
@@ -197,126 +197,125 @@ shed_parse_args () {
                 echo "Unexpected argument to option: '$OPTION'"
                 return 1
             fi
+        else
+            echo "Invalid argument: '$1'"
+            return 1
         fi
         shift
-        # Check for unary options
+
+        # Check options with arguments
+        if [ -n "$OPTVAL" ]; then
+            ALLOW_OPTVAL=false
+            case "$OPTION" in
+                -a|--archive-compression)
+                    shed_set_binary_archive_compression "$OPTVAL" || return 1
+                    ;;
+                -b|--branch)
+                    REPO_BRANCH="$OPTVAL"
+                    ;;
+                -B|--binary-dir)
+                    BINCACHEDIR="$OPTVAL"
+                    ;;
+                -d|--device)
+                    SHED_DEVICE="$OPTVAL"
+                    ;;
+                -D|--dependency-of)
+                    DEPENDENCY_OF="$OPTVAL"
+                    ;;
+                -h|--host)
+                    SHED_BUILD_HOST="$OPTVAL"
+                    ;;
+                -o|--options)
+                    if ! OVERRIDE_OPTIONS; then
+                        OVERRIDE_OPTIONS=true
+                        SHED_OPTIONS=( "$OPTVAL" )
+                    else
+                        SHED_OPTIONS+=( "$OPTVAL" )
+                    fi
+                    ALLOW_OPTVAL=true
+                    ;;
+                -p|--purge)
+                    SHOULD_PURGE=$(shed_parse_yes_no "$OPTVAL")
+                    if [ $? -ne 0 ]; then
+                        echo "Invalid argument for '$OPTION' Please specify 'yes' or 'no'"
+                        return 1
+                    fi
+                    ;;
+                -r|--install-root)
+                    SHED_INSTALL_ROOT="$OPTVAL"
+                    ;;
+                -j|--jobs)
+                    SHED_NUM_JOBS="$OPTVAL"
+                    ;;
+                -n|--rename)
+                    REPONAME="$OPTVAL"
+                    ;;
+                -s|--strip)
+                    SHOULD_STRIP=$(shed_parse_yes_no "$OPTVAL")
+                    if [ $? -ne 0 ]; then
+                        echo "Invalid argument for '$OPTION' Please specify 'yes' or 'no'"
+                        return 1
+                    fi
+                    ;;
+                -S|--source-dir)
+                    SRCCACHEDIR="$OPTVAL"
+                    ;;
+                -t|--target)
+                    SHED_BUILD_TARGET="$OPTVAL"
+                    ;;
+                -u|--url)
+                    REPOURL="$OPTVAL"
+                    ;;
+                *)
+                    echo "Invalid option: '$OPTION'"
+                    return 1
+                    ;;
+            esac
+            continue
+        fi
+
+        # Check unary options
         case "$OPTION" in
             -c|--cache-source)
                 SHOULD_CACHE_SOURCE=true
-                continue
                 ;;
             -C|--cache-binary)
                 SHOULD_CACHE_BINARY=true
-                continue
                 ;;
             -f|--force)
                 FORCE_ACTION=true
-                continue
                 ;;
             -I|--ignore-dependencies)
                 SHOULD_IGNORE_DEPS=true
-                continue
                 ;;
             -i|--install-dependencies)
                 SHOULD_INSTALL_DEPS=true
-                continue
                 ;;
             -k|--skip-preinstall)
                 SHOULD_PREINSTALL=false
-                continue
                 ;;
             -K|--skip-postinstall)
                 SHOULD_POSTINSTALL=false
-                continue
                 ;;
             -N|--skip-install)
                 SHOULD_INSTALL=false
-                continue
                 ;;
             -R|--retain-temp)
                 SHOULD_CLEAN_TEMP=false
-                continue
                 ;;
             -v|--verbose)
                 VERBOSE=true
                 shed_set_output_verbosity $VERBOSE
-                continue
-                ;;
-        esac
-
-        # Options that permit values
-        if [ -z "$OPTVAL" ]; then
-            REQUIRE_OPTVAL=true
-            continue
-        else
-            ALLOW_OPTVAL=false
-        fi
-        case "$OPTION" in
-            -a|--archive-compression)
-                shed_set_binary_archive_compression "$OPTVAL" || return 1
-                ;;
-            -b|--branch)
-                REPO_BRANCH="$OPTVAL"
-                ;;
-            -B|--binary-dir)
-                BINCACHEDIR="$OPTVAL"
-                ;;
-            -d|--device)
-                SHED_DEVICE="$OPTVAL"
-                ;;
-            -D|--dependency-of)
-                DEPENDENCY_OF="$OPTVAL"
-                ;;
-            -h|--host)
-                SHED_BUILD_HOST="$OPTVAL"
-                ;;
-            -o|--options)
-                if ! OVERRIDE_OPTIONS; then
-                    OVERRIDE_OPTIONS=true
-                    SHED_OPTIONS=( "$OPTVAL" )
-                else
-                    SHED_OPTIONS+=( "$OPTVAL" )
-                fi
-                ALLOW_OPTVAL=true
-                ;;
-            -p|--purge)
-                SHOULD_PURGE=$(shed_parse_yes_no "$OPTVAL")
-                if [ $? -ne 0 ]; then
-                    echo "Invalid argument for '$OPTION' Please specify 'yes' or 'no'"
-                    return 1
-                fi
-                ;;
-            -r|--install-root)
-                SHED_INSTALL_ROOT="$OPTVAL"
-                ;;
-            -j|--jobs)
-                SHED_NUM_JOBS="$OPTVAL"
-                ;;
-            -n|--rename)
-                REPONAME="$OPTVAL"
-                ;;
-            -s|--strip)
-                SHOULD_STRIP=$(shed_parse_yes_no "$OPTVAL")
-                if [ $? -ne 0 ]; then
-                    echo "Invalid argument for '$OPTION' Please specify 'yes' or 'no'"
-                    return 1
-                fi
-                ;;
-            -S|--source-dir)
-                SRCCACHEDIR="$OPTVAL"
-                ;;
-            -t|--target)
-                SHED_BUILD_TARGET="$OPTVAL"
-                ;;
-            -u|--url)
-                REPOURL="$OPTVAL"
                 ;;
             *)
-                echo "Unknown option: '$OPTION'"
-                return 1
+                if [ $# -gt 0 ]; then
+                    # Assume this is an option that takes arguments
+                    REQUIRE_OPTVAL=true
+                else
+                    echo "Invalid option: '$OPTION'"
+                fi
                 ;;
         esac
-
     done
 }
 
@@ -1412,8 +1411,8 @@ shed_command () {
             shed_read_package_meta "$1" &&
             shift &&
             shed_parse_args "$@" &&
-            echo "Shedmake is preparing to build '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET)..." &&
             shed_configure_options &&
+            echo "Shedmake is preparing to build '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET)..." &&
             shed_resolve_dependencies BUILD_DEPS 'build' 'install' 'false' &&
             shed_build
             ;;
