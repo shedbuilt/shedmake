@@ -9,5 +9,4 @@ DEVICE=nanopi-neo-plus2
 CPU_CORE=cortex-a53
 CPU_FEATURES=crypto
 NATIVE_TARGET=aarch64-unknown-linux-gnu
-TOOLCHAIN_TARGET=aarch64-shedstrap-linux-gnu
-OPTIONS=docs release
+OPTIONS=release docs

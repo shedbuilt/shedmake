@@ -100,7 +100,6 @@ shed_load_config () {
     export SHED_CPU_CORE="$(sed -n 's/^CPU_CORE=//p' $CFGFILE)"
     export SHED_CPU_FEATURES="$(sed -n 's/^CPU_FEATURES=//p' $CFGFILE)"
     export SHED_NATIVE_TARGET="$(sed -n 's/^NATIVE_TARGET=//p' $CFGFILE)"
-    export SHED_TOOLCHAIN_TARGET="$(sed -n 's/^TOOLCHAIN_TARGET=//p' $CFGFILE)"
 }
 
 shed_load_defaults () {
@@ -118,8 +117,8 @@ shed_load_defaults () {
     SHOULD_STRIP=true
     SHOULD_REQUIRE_ROOT=false
     DEFERRED_DEPS=( )
-    export SHED_BUILD_TARGET='native'
-    export SHED_BUILD_HOST='native'
+    export SHED_BUILD_TARGET="$SHED_NATIVE_TARGET"
+    export SHED_BUILD_HOST="$SHED_NATIVE_TARGET"
     export SHED_INSTALL_ROOT='/'
     export SHED_NUM_JOBS="$DEFAULT_NUMJOBS"
     export SHED_DEVICE="$DEFAULT_DEVICE"
@@ -193,6 +192,7 @@ shed_parse_args () {
         elif [ -n "$OPTION" ]; then
             if $REQUIRE_OPTVAL || $ALLOW_OPTVAL; then
                 OPTVAL="$1"
+                REQUIRE_OPTVAL=false
             else
                 echo "Unexpected argument to option: '$OPTION'"
                 return 1
@@ -313,6 +313,7 @@ shed_parse_args () {
                     REQUIRE_OPTVAL=true
                 else
                     echo "Invalid option: '$OPTION'"
+                    return 1
                 fi
                 ;;
         esac
@@ -397,6 +398,7 @@ shed_configure_options () {
     done
 
     export SHED_PKG_OPTIONS="${!PACKAGE_OPTIONS_MAP[@]}"
+    export SHED_PKG_OPTIONS_ASSOC=$(declare -p PACKAGE_OPTIONS_MAP | sed -e 's/declare -A \w\+=//')
     local SORTED_OPTIONS=($(for OPTION in ${SHED_PKG_OPTIONS[@]}; do echo $OPTION; done | LC_ALL=C sort))
     local DELIMITED_SORTED_OPTIONS="${SORTED_OPTIONS[@]}"
     if [ -n "$DELIMITED_SORTED_OPTIONS" ]; then
@@ -735,7 +737,6 @@ shed_run_chroot_script () {
     SHED_BUILD_HOST="$SHED_BUILD_HOST" \
     SHED_BUILD_TARGET="$SHED_BUILD_TARGET" \
     SHED_NATIVE_TARGET="$SHED_NATIVE_TARGET" \
-    SHED_TOOLCHAIN_TARGET="$SHED_TOOLCHAIN_TARGET" \
     SHED_INSTALL_ROOT='/' \
     SHED_NUM_JOBS="$SHED_NUM_JOBS" \
     SHED_PKG_DIR="$2" \
@@ -746,7 +747,8 @@ shed_run_chroot_script () {
     SHED_PKG_VERSION="$SHED_PKG_VERSION" \
     SHED_PKG_REVISION="$SHED_PKG_REVISION" \
     SHED_PKG_VERSION_TRIPLET="$SHED_PKG_VERSION_TRIPLET" \
-    SHED_PKG_OPTIONS="${SHED_PKG_OPTIONS[@]}"
+    SHED_PKG_OPTIONS="${SHED_PKG_OPTIONS[@]}" \
+    SHED_PKG_OPTIONS_ASSOC="$SHED_PKG_OPTIONS_ASSOC" \
     SHED_PKG_INSTALL_BOM="${2}/install/${SHED_PKG_VERSION_TRIPLET}.bom" \
     SHED_PKG_INSTALL_LOG="$SHED_PKG_INSTALL_LOG" \
     SHED_PKG_INSTALLED_VERSION_TRIPLET="$SHED_PKG_INSTALLED_VERSION_TRIPLET" \

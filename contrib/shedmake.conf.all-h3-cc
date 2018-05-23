@@ -9,5 +9,4 @@ DEVICE=all-h3-cc
 CPU_CORE=cortex-a7
 CPU_FEATURES=neon-vfpv4
 NATIVE_TARGET=armv7l-unknown-linux-gnueabihf
-TOOLCHAIN_TARGET=armv7l-shedstrap-linux-gnueabihf
-OPTIONS=docs release
+OPTIONS=release docs
