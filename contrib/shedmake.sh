@@ -176,23 +176,21 @@ shed_locate_repo () {
 
 shed_parse_args () {
     PARSEDARGS=( "$@" )
-    local OPTION
-    local OPTVAL
-    local ALLOW_OPTVAL=false
-    local REQUIRE_OPTVAL=false
-    local OVERRIDE_OPTIONS=false
+    local OPTION=''
+    local OPTVAL=''
+    local EXPECT_OPTVAL=false
     while (( $# )); do
         OPTVAL=''
         if [ "${1:0:1}" == '-' ]; then
-            if $REQUIRE_OPTVAL; then
+            if $EXPECT_OPTVAL; then
                 echo "Missing argument to option: '$OPTION'"
                 return 1
             fi
             OPTION="$1"
         elif [ -n "$OPTION" ]; then
-            if $REQUIRE_OPTVAL || $ALLOW_OPTVAL; then
+            if $EXPECT_OPTVAL; then
                 OPTVAL="$1"
-                REQUIRE_OPTVAL=false
+                EXPECT_OPTVAL=false
             else
                 echo "Unexpected argument to option: '$OPTION'"
                 return 1
@@ -205,7 +203,6 @@ shed_parse_args () {
 
         # Check options with arguments
         if [ -n "$OPTVAL" ]; then
-            ALLOW_OPTVAL=false
             case "$OPTION" in
                 -a|--archive-compression)
                     shed_set_binary_archive_compression "$OPTVAL" || return 1
@@ -226,13 +223,7 @@ shed_parse_args () {
                     SHED_BUILD_HOST="$OPTVAL"
                     ;;
                 -o|--options)
-                    if ! OVERRIDE_OPTIONS; then
-                        OVERRIDE_OPTIONS=true
-                        SHED_OPTIONS=( "$OPTVAL" )
-                    else
-                        SHED_OPTIONS+=( "$OPTVAL" )
-                    fi
-                    ALLOW_OPTVAL=true
+                    SHED_OPTIONS=( "$OPTVAL" )
                     ;;
                 -p|--purge)
                     SHOULD_PURGE=$(shed_parse_yes_no "$OPTVAL")
@@ -310,7 +301,7 @@ shed_parse_args () {
             *)
                 if [ $# -gt 0 ]; then
                     # Assume this is an option that takes arguments
-                    REQUIRE_OPTVAL=true
+                    EXPECT_OPTVAL=true
                 else
                     echo "Invalid option: '$OPTION'"
                     return 1
@@ -318,6 +309,11 @@ shed_parse_args () {
                 ;;
         esac
     done
+
+    if $EXPECT_OPTVAL; then
+        echo "Missing argument to option: '$OPTION'"
+        return 1
+    fi
 }
 
 shed_configure_options () {
@@ -424,7 +420,7 @@ shed_read_package_meta () {
     SRCCACHEDIR="${SHED_PKG_DIR}/source"
     BINCACHEDIR="${SHED_PKG_DIR}/binary"
     PKGMETAFILE="${SHED_PKG_DIR}/package.txt"
-    export SHED_PATCHDIR="${SHED_PKG_DIR}/patch"
+    export SHED_PKG_PATCH_DIR="${SHED_PKG_DIR}/patch"
     export SHED_PKG_CONTRIB_DIR="${SHED_PKG_DIR}/contrib"
     export SHED_PKG_LOG_DIR="${SHED_PKG_DIR}/install"
 
@@ -516,9 +512,9 @@ shed_package_info () {
         echo "Installed Version:	Not Installed"
     fi
     if $VERBOSE; then
-        if [ -d "$SHED_PATCHDIR" ]; then
+        if [ -d "$SHED_PKG_PATCH_DIR" ]; then
             echo -n "Patches: "
-            ls "$SHED_PATCHDIR"
+            ls "$SHED_PKG_PATCH_DIR"
         fi
         if [ -d "$SHED_PKG_CONTRIB_DIR" ]; then
             echo -n "Contrib Files: "
@@ -1498,7 +1494,8 @@ shed_command () {
             local DEP_CMD_ACTION
             shed_read_package_meta "$1" &&
             shift &&
-            shed_parse_args "$@" || return $?
+            shed_parse_args "$@" &&
+            shed_configure_options || return $?
             shed_package_status &>/dev/null
             PKGSTATUS=$?
             case "$SHEDCMD" in
@@ -1541,7 +1538,6 @@ shed_command () {
                     echo "Shedmake is preparing to upgrade '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET) on ${SHED_INSTALL_ROOT}..."
                     ;;
             esac
-            shed_configure_options &&
             shed_resolve_dependencies INSTALL_DEPS "$DEP_CMD_ACTION" "$DEP_CMD_ACTION" 'true' &&
             shed_install &&
             shed_resolve_dependencies DEFERRED_DEPS 'deferred' "$DEP_CMD_ACTION" 'false' || return $?
