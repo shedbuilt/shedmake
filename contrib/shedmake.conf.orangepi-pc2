@@ -9,4 +9,4 @@ DEVICE=orangepi-pc2
 CPU_CORE=cortex-a53
 CPU_FEATURES=crypto
 NATIVE_TARGET=aarch64-unknown-linux-gnu
-OPTIONS=release docs
+OPTIONS=release docs sun50i
