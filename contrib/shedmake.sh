@@ -76,7 +76,6 @@ shed_print_args_error () {
     echo "Invalid number of arguments to '$1'. Usage: shedmake $1 $2"
 }
 
-
 shed_print_repo_locate_error () {
     echo "Unable to locate managed package repository named '$1'"
 }
@@ -94,7 +93,6 @@ shed_load_config () {
     DEFAULT_CACHE_BINARY=$(shed_parse_yes_no "$(sed -n 's/^CACHE_BIN=//p' $CFGFILE)")
     DEFAULT_COMPRESSION="$(sed -n 's/^COMPRESSION=//p' $CFGFILE)"
     DEFAULT_NUMJOBS="$(sed -n 's/^NUM_JOBS=//p' $CFGFILE)"
-    DEFAULT_DEVICE="$(sed -n 's/^DEVICE=//p' $CFGFILE)"
     read -ra DEFAULT_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' $CFGFILE)
     export SHED_RELEASE="$(sed -n 's/^RELEASE=//p' $CFGFILE)"
     export SHED_CPU_CORE="$(sed -n 's/^CPU_CORE=//p' $CFGFILE)"
@@ -121,7 +119,6 @@ shed_load_defaults () {
     export SHED_BUILD_HOST="$SHED_NATIVE_TARGET"
     export SHED_INSTALL_ROOT='/'
     export SHED_NUM_JOBS="$DEFAULT_NUMJOBS"
-    export SHED_DEVICE="$DEFAULT_DEVICE"
     export SHED_OPTIONS="${DEFAULT_OPTIONS[@]}"
     REPO_BRANCH="$SHED_RELEASE"
     shed_set_binary_archive_compression "$DEFAULT_COMPRESSION"
@@ -212,9 +209,6 @@ shed_parse_args () {
                     ;;
                 -B|--binary-dir)
                     BINCACHEDIR="$OPTVAL"
-                    ;;
-                -d|--device)
-                    SHED_DEVICE="$OPTVAL"
                     ;;
                 -D|--dependency-of)
                     DEPENDENCY_OF="$OPTVAL"
@@ -464,6 +458,8 @@ shed_read_package_meta () {
     read -ra SUPPORTED_PACKAGE_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' ${PKGMETAFILE})
     read -ra DEFAULT_PACKAGE_OPTIONS <<< $(sed -n 's/^DEFAULTS=//p' ${PKGMETAFILE})
 
+    export SHED_PKG_DOC_INSTALL_DIR="/usr/share/doc/${SHED_PKG_NAME}-${SHED_PKG_VERSION}"
+    export SHED_PKG_DEFAULTS_INSTALL_DIR="/usr/share/defaults/${SHED_PKG_NAME}"
     export SHED_INSTALL_HISTORY="${SHED_PKG_LOG_DIR}/install.log"
     export SHED_PKG_INSTALLED_VERSION_TRIPLET=''
     if [ -e "$SHED_INSTALL_HISTORY" ]; then
@@ -728,7 +724,6 @@ shed_run_chroot_script () {
     TERM="$TERM"                \
     PS1='\u:\w\$ '              \
     PATH=/bin:/usr/bin:/sbin:/usr/sbin \
-    SHED_DEVICE="$SHED_DEVICE" \
     SHED_RELEASE="$SHED_RELEASE" \
     SHED_BUILD_HOST="$SHED_BUILD_HOST" \
     SHED_BUILD_TARGET="$SHED_BUILD_TARGET" \
@@ -739,6 +734,8 @@ shed_run_chroot_script () {
     SHED_PKG_CONTRIB_DIR="${2}/contrib" \
     SHED_PKG_PATCH_DIR="${2}/patch" \
     SHED_PKG_LOG_DIR="${2}/install" \
+    SHED_PKG_DOCS_INSTALL_DIR="$SHED_PKG_DOCS_INSTALL_DIR" \
+    SHED_PKG_DEFAULTS_INSTALL_DIR="$SHED_PKG_DEFAULTS_INSTALL_DIR" \
     SHED_PKG_NAME="$SHED_PKG_NAME" \
     SHED_PKG_VERSION="$SHED_PKG_VERSION" \
     SHED_PKG_REVISION="$SHED_PKG_REVISION" \
@@ -813,14 +810,39 @@ shed_download_file () {
     wget -O "$2" "$1" 1>&3 2>&4
 }
 
+# Function: shed_md5sum_of_file
+# Description: Prints the md5sum of the file at then given path
+# Arguments:
+#     $1 - Path to file to hash
+# Returns:
+#     0 - Successfully printed md5sum
+#     1 - Error obtaining md5sum
+#     2 - File not found or not readable
+shed_md5sum_of_file () {
+    if [ -r "$1" ]; then
+        echo $(md5sum "$1" | awk '{print $1}')
+        if [ $? -ne 0 ]; then
+            # Error obtaining md5
+            return 1
+        fi
+    else
+        # File not present
+        return 2
+    fi
+}
+
 # Function: shed_verify_file
 # Description: Verifies a given file using an md5sum
 # Arguments:
 #     $1 - Path to file to verify
 #     $2 - (Optional) md5sum against which the file will be tested
 shed_verify_file () {
+    local FILE_MD5SUM
     if [ -n "$2" ]; then
-        if [[ $(md5sum "$1" | awk '{print $1}') != $2 ]]; then
+        FILE_MD5SUM=$(shed_md5sum_of_file "$1")
+        if [ $? -eq 0 ] && [ "$FILE_MD5SUM" == "$2" ]; then
+            return 0
+        else
             return 1
         fi
     elif $VERBOSE; then
@@ -853,7 +875,7 @@ shed_fetch_source () {
             cd "${1}/${SHED_PKG_NAME}-git"
             # Perform a shallow fetch of the desired refspec
             local LOCALREPOREF="$(sed -e "s/^refs\/heads\//refs\/remotes\/origin\//g" <<< $REPOREF)"
-            git fetch --depth=1 origin +${REPOREF}:${LOCALREPOREF} 1>&3 2>&4 && \
+            git fetch --depth=1 origin +${REPOREF}:${LOCALREPOREF} 1>&3 2>&4 &&
             git checkout --quiet FETCH_HEAD 1>&3 2>&4 || return 1
             if ! $VERBOSE; then echo 'done'; fi
             # TODO: Use signature for verification
@@ -899,7 +921,7 @@ shed_build () {
 
     # Work directory management
     rm -rf "$WORKDIR"
-    mkdir "$WORKDIR"
+    mkdir -p "$WORKDIR"
 
     # Source acquisition and unpacking
     shed_fetch_source "$WORKDIR" || return 21
@@ -1013,7 +1035,8 @@ shed_fetch_binary () {
 #    32 - Install script error
 #    33 - Binary archive acquisition error
 #    34 - Binary archive extraction error
-#    35 - Post-install script error
+#    35 - Default configuration file installation error
+#    36 - Post-install script error
 shed_install () {
     if [[ $EUID -ne 0 ]]; then
         echo "Root privileges are required to install a package."
@@ -1083,6 +1106,8 @@ shed_install () {
                 return 33
             fi
         fi
+        # Install default configuration files
+        shed_install_defaults || return 35
     else
         echo "Skipping the install phase."
     fi
@@ -1093,9 +1118,9 @@ shed_install () {
             echo -n "Running post-install script for '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET)..."
             if $VERBOSE; then echo; fi
             if [ "$SHED_INSTALL_ROOT" == '/' ]; then
-                shed_run_script "${SHED_PKG_DIR}/postinstall.sh" || return 35
+                shed_run_script "${SHED_PKG_DIR}/postinstall.sh" || return 36
             else
-                shed_run_chroot_script "$SHED_INSTALL_ROOT" "$SHED_CHROOT_PKGDIR" postinstall.sh || return 35
+                shed_run_chroot_script "$SHED_INSTALL_ROOT" "$SHED_CHROOT_PKGDIR" postinstall.sh || return 36
             fi
             if ! $VERBOSE; then echo 'done'; fi
         else
@@ -1122,6 +1147,77 @@ shed_install () {
     fi
 
     echo "Successfully installed '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET)"
+}
+
+shed_install_defaults () {
+    # Catalogue available default files
+    local DEFAULT_FILE
+    local FILE_MD5SUM
+    local DEFAULTS_LOG_FILE="${SHED_PKG_LOG_DIR}/defaults.log"
+    declare -A DEFAULT_FILES_MAP
+    cd "${SHED_INSTALL_ROOT}${SHED_PKG_DEFAULTS_INSTALL_DIR}"
+    shopt -s globstar nullglob dotglob
+    for DEFAULT_FILE in **; do
+        if [ -d "$DEFAULT_FILE" ]; then
+            continue
+        fi
+        FILE_MD5SUM=$(shed_md5sum_of_file "$DEFAULT_FILE")
+        if [ $? -eq 0 ]; then
+            DEFAULT_FILES_MAP["$DEFAULT_FILE"]="$FILE_MD5SUM"
+        else
+            echo "Unable to produce md5sum for '$DEFAULT_FILE'"
+        fi
+    done
+    shopt -u globstar nullglob dotglob
+    echo "Available Defaults: $(declare -p DEFAULT_FILES_MAP | sed -e 's/declare -A \w\+=//')"
+
+    if [ ${#DEFAULT_FILES_MAP[@]} -gt 0 ]; then
+        echo -n "Installing default configuration files..."
+        if $VERBOSE; then echo; fi
+    else
+        return 0
+    fi
+
+    # Load recorded defaults
+    declare -A RECORDED_DEFAULTS_MAP
+    if [ -r "${SHED_PKG_LOG_DIR}/defaults.bom" ]; then
+        while read -ra INSTALLED_DEFAULT
+        do
+            if [ ${#INSTALLED_DEFAULT[@]} -ne 2 ]; then
+                echo "Unable to parse installed default: $INSTALLED_DEFAULT"
+                continue
+            fi
+            RECORDED_DEFAULTS_MAP["${INSTALLED_DEFAULT[0]}"]="${INSTALLED_DEFAULT[1]}"
+        done < "$DEFAULTS_LOG_FILE"
+    fi
+    echo "Recorded Defaults: $(declare -p RECORDED_DEFAULTS_MAP | sed -e 's/declare -A \w\+=//')"
+
+    # Iterate through available default files
+    for DEFAULT_FILE in "${!DEFAULT_FILES_MAP[@]}"; do
+        # For each, see if there's a corresponding file on disk
+        FILE_MD5SUM="$(shed_md5sum_of_file ${SHED_INSTALL_ROOT}${DEFAULT_FILE})"
+        if [ $? -eq 1 ]; then
+            # Exit on errors other than missing file
+            echo "Error checking md5sum of potentially installed default file at: '${SHED_INSTALL_ROOT%/}${DEFAULT_FILE}'"
+            return 1
+        fi
+        if [ "${RECORDED_DEFAULTS_MAP[$DEFAULT_FILE]}" != "$FILE_MD5SUM" ]; then
+            # If the hashes don't match, don't install the file
+            if $VERBOSE; then
+                echo "Avoiding overwriting configuration file '$DEFAULT_FILE' with md5sum '${FILE_MD5SUM}' with default version with md5sum '${DEFAULT_FILES_MAP["$DEFAULT_FILE"]}' due to mismatch with recorded md5sum '${RECORDED_DEFAULTS_MAP[$DEFAULT_FILE]}'"
+            fi
+            continue
+        fi
+        # Install the file if necessary (or forced) and update our installed defaults map with its md5sum
+        install -vd "${SHED_INSTALL_ROOT}${SHED_PKG_DEFAULTS_INSTALL_DIR}${DEFAULT_FILE}" "${SHED_INSTALL_ROOT}${DEFAULT_FILE}" 1>&3 2>&4 &&
+        RECORDED_DEFAULTS_MAP["$DEFAULT_FILE"]="${DEFAULT_FILES_MAP["$DEFAULT_FILE"]}" || return 1
+    done
+    # Write out the updated defaults.bom
+    rm "$DEFAULTS_LOG_FILE"
+    for DEFAULT_FILE in "${!RECORDED_DEFAULTS_MAP[@]}"; do
+        echo "$RECORDED_DEFAULTS_MAP ${RECORDED_DEFAULTS_MAP["$DEFAULT_FILE"]}" > "$DEFAULTS_LOG_FILE"
+    done
+    if ! $VERBOSE; then echo 'done'; fi
 }
 
 shed_update_repo_at_path () {
@@ -1671,7 +1767,7 @@ if [ $# -gt 0 ] && [ "${1: -5}" = '-list' ]; then
         if [[ "$SMLARGS" =~ ^#.* ]]; then
             continue
         fi
-        PKGARGS=( "$LISTCMD" "${SMLARGS[@]}" "$@" )
+        PKGARGS=( $LISTCMD ${SMLARGS[@]} $@ )
         shed_command "${PKGARGS[@]}" || exit $?
         cd "$LISTWD"
     done < "$SMLFILE"
