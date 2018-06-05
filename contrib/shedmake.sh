@@ -734,7 +734,7 @@ shed_run_chroot_script () {
     SHED_PKG_CONTRIB_DIR="${2}/contrib" \
     SHED_PKG_PATCH_DIR="${2}/patch" \
     SHED_PKG_LOG_DIR="${2}/install" \
-    SHED_PKG_DOCS_INSTALL_DIR="$SHED_PKG_DOCS_INSTALL_DIR" \
+    SHED_PKG_DOC_INSTALL_DIR="$SHED_PKG_DOC_INSTALL_DIR" \
     SHED_PKG_DEFAULTS_INSTALL_DIR="$SHED_PKG_DEFAULTS_INSTALL_DIR" \
     SHED_PKG_NAME="$SHED_PKG_NAME" \
     SHED_PKG_VERSION="$SHED_PKG_VERSION" \
@@ -1209,7 +1209,8 @@ shed_install_defaults () {
             continue
         fi
         # Install the file if necessary (or forced) and update our installed defaults map with its md5sum
-        install -vd "${SHED_INSTALL_ROOT}${SHED_PKG_DEFAULTS_INSTALL_DIR}${DEFAULT_FILE}" "${SHED_INSTALL_ROOT}${DEFAULT_FILE}" 1>&3 2>&4 &&
+        local FILE_PERMISSIONS=$(stat -c "%a" "${SHED_INSTALL_ROOT}${SHED_PKG_DEFAULTS_INSTALL_DIR}${DEFAULT_FILE}")
+        install -vdm${FILE_PERMISSIONS} "${SHED_INSTALL_ROOT}${SHED_PKG_DEFAULTS_INSTALL_DIR}${DEFAULT_FILE}" "${SHED_INSTALL_ROOT}${DEFAULT_FILE}" 1>&3 2>&4 &&
         RECORDED_DEFAULTS_MAP["$DEFAULT_FILE"]="${DEFAULT_FILES_MAP["$DEFAULT_FILE"]}" || return 1
     done
     # Write out the updated defaults.bom
