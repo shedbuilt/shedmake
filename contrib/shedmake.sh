@@ -458,7 +458,7 @@ shed_read_package_meta () {
     read -ra SUPPORTED_PACKAGE_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' ${PKGMETAFILE})
     read -ra DEFAULT_PACKAGE_OPTIONS <<< $(sed -n 's/^DEFAULTS=//p' ${PKGMETAFILE})
 
-    export SHED_PKG_DOC_INSTALL_DIR="/usr/share/doc/${SHED_PKG_NAME}-${SHED_PKG_VERSION}"
+    export SHED_PKG_DOCS_INSTALL_DIR="/usr/share/doc/${SHED_PKG_NAME}-${SHED_PKG_VERSION}"
     export SHED_PKG_DEFAULTS_INSTALL_DIR="/usr/share/defaults/${SHED_PKG_NAME}"
     export SHED_INSTALL_HISTORY="${SHED_PKG_LOG_DIR}/install.log"
     export SHED_PKG_INSTALLED_VERSION_TRIPLET=''
@@ -734,7 +734,7 @@ shed_run_chroot_script () {
     SHED_PKG_CONTRIB_DIR="${2}/contrib" \
     SHED_PKG_PATCH_DIR="${2}/patch" \
     SHED_PKG_LOG_DIR="${2}/install" \
-    SHED_PKG_DOC_INSTALL_DIR="$SHED_PKG_DOC_INSTALL_DIR" \
+    SHED_PKG_DOCS_INSTALL_DIR="$SHED_PKG_DOCS_INSTALL_DIR" \
     SHED_PKG_DEFAULTS_INSTALL_DIR="$SHED_PKG_DEFAULTS_INSTALL_DIR" \
     SHED_PKG_NAME="$SHED_PKG_NAME" \
     SHED_PKG_VERSION="$SHED_PKG_VERSION" \
