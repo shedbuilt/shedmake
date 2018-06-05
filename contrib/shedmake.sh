@@ -111,6 +111,7 @@ shed_load_defaults () {
     SHOULD_PREINSTALL=true
     SHOULD_INSTALL=true
     SHOULD_POSTINSTALL=true
+    SHOULD_INSTALL_DEFAULTS=true
     SHOULD_PURGE=false
     SHOULD_STRIP=true
     SHOULD_REQUIRE_ROOT=false
@@ -210,7 +211,7 @@ shed_parse_args () {
                 -B|--binary-dir)
                     BINCACHEDIR="$OPTVAL"
                     ;;
-                -D|--dependency-of)
+                -d|--dependency-of)
                     DEPENDENCY_OF="$OPTVAL"
                     ;;
                 -h|--host)
@@ -266,6 +267,9 @@ shed_parse_args () {
                 ;;
             -C|--cache-binary)
                 SHOULD_CACHE_BINARY=true
+                ;;
+            -D|--skip-defaults-install)
+                SHOULD_INSTALL_DEFAULTS=false
                 ;;
             -f|--force)
                 FORCE_ACTION=true
@@ -1107,7 +1111,9 @@ shed_install () {
             fi
         fi
         # Install default configuration files
-        shed_install_defaults || return 35
+        if $SHOULD_INSTALL_DEFAULTS; then
+            shed_install_defaults || return 35
+        fi
     else
         echo "Skipping the install phase."
     fi
@@ -1155,20 +1161,22 @@ shed_install_defaults () {
     local FILE_MD5SUM
     local DEFAULTS_LOG_FILE="${SHED_PKG_LOG_DIR}/defaults.log"
     declare -A DEFAULT_FILES_MAP
-    cd "${SHED_INSTALL_ROOT}${SHED_PKG_DEFAULTS_INSTALL_DIR}"
-    shopt -s globstar nullglob dotglob
-    for DEFAULT_FILE in **; do
-        if [ -d "$DEFAULT_FILE" ]; then
-            continue
-        fi
-        FILE_MD5SUM=$(shed_md5sum_of_file "$DEFAULT_FILE")
-        if [ $? -eq 0 ]; then
-            DEFAULT_FILES_MAP["$DEFAULT_FILE"]="$FILE_MD5SUM"
-        else
-            echo "Unable to produce md5sum for '$DEFAULT_FILE'"
-        fi
-    done
-    shopt -u globstar nullglob dotglob
+    if [ -d "${SHED_INSTALL_ROOT}${SHED_PKG_DEFAULTS_INSTALL_DIR}" ]; then
+        cd "${SHED_INSTALL_ROOT}${SHED_PKG_DEFAULTS_INSTALL_DIR}"
+        shopt -s globstar nullglob dotglob
+        for DEFAULT_FILE in **; do
+            if [ -d "$DEFAULT_FILE" ]; then
+                continue
+            fi
+            FILE_MD5SUM=$(shed_md5sum_of_file "$DEFAULT_FILE")
+            if [ $? -eq 0 ]; then
+                DEFAULT_FILES_MAP["$DEFAULT_FILE"]="$FILE_MD5SUM"
+            else
+                echo "Unable to produce md5sum for '$DEFAULT_FILE'"
+            fi
+        done
+        shopt -u globstar nullglob dotglob
+    fi
     echo "Available Defaults: $(declare -p DEFAULT_FILES_MAP | sed -e 's/declare -A \w\+=//')"
 
     if [ ${#DEFAULT_FILES_MAP[@]} -gt 0 ]; then
@@ -1180,7 +1188,7 @@ shed_install_defaults () {
 
     # Load recorded defaults
     declare -A RECORDED_DEFAULTS_MAP
-    if [ -r "${SHED_PKG_LOG_DIR}/defaults.bom" ]; then
+    if [ -r "$DEFAULTS_LOG_FILE" ]; then
         while read -ra INSTALLED_DEFAULT
         do
             if [ ${#INSTALLED_DEFAULT[@]} -ne 2 ]; then
@@ -1198,7 +1206,7 @@ shed_install_defaults () {
         FILE_MD5SUM="$(shed_md5sum_of_file ${SHED_INSTALL_ROOT}${DEFAULT_FILE})"
         if [ $? -eq 1 ]; then
             # Exit on errors other than missing file
-            echo "Error checking md5sum of potentially installed default file at: '${SHED_INSTALL_ROOT%/}${DEFAULT_FILE}'"
+            echo "Error checking md5sum of potentially installed default file at: '${SHED_INSTALL_ROOT}${DEFAULT_FILE}'"
             return 1
         fi
         if [ "${RECORDED_DEFAULTS_MAP[$DEFAULT_FILE]}" != "$FILE_MD5SUM" ]; then
