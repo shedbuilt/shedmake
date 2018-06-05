@@ -1776,7 +1776,7 @@ if [ $# -gt 0 ] && [ "${1: -5}" = '-list' ]; then
         if [[ "$SMLARGS" =~ ^#.* ]]; then
             continue
         fi
-        PKGARGS=( $LISTCMD ${SMLARGS[@]} $@ )
+        PKGARGS=( "$LISTCMD" ${SMLARGS[@]} "$@" )
         shed_command "${PKGARGS[@]}" || exit $?
         cd "$LISTWD"
     done < "$SMLFILE"
