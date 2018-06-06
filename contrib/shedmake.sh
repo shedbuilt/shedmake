@@ -454,9 +454,9 @@ shed_read_package_meta () {
     read -ra LICENSE <<< $(sed -n 's/^LICENSE=//p' ${PKGMETAFILE})
 
     # Parse dependencies
-    read -ra BUILD_DEPS <<< $(sed -n 's/^BUILD_DEPS=//p' ${PKGMETAFILE})
-    read -ra INSTALL_DEPS <<< $(sed -n 's/^INSTALL_DEPS=//p' ${PKGMETAFILE})
-    read -ra RUN_DEPS <<< $(sed -n 's/^RUN_DEPS=//p' ${PKGMETAFILE})
+    read -ra BUILD_DEPS <<< $(sed -n 's/^BUILDDEPS=//p' ${PKGMETAFILE})
+    read -ra INSTALL_DEPS <<< $(sed -n 's/^INSTALLDEPS=//p' ${PKGMETAFILE})
+    read -ra RUN_DEPS <<< $(sed -n 's/^RUNDEPS=//p' ${PKGMETAFILE})
 
     #Parse package options
     read -ra SUPPORTED_PACKAGE_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' ${PKGMETAFILE})
@@ -546,7 +546,7 @@ shed_resolve_dependencies () {
     local DEP_RETVAL=0
     local DEP_TO_ADD
     local DEP_COMPONENT
-    if ! $SHOULD_IGNORE_DEPS && [ ${#DEPS[@]} -gt 0 ]; then
+    if ! $SHOULD_IGNORE_DEPS && [ ${#UNPROCESSED_DEPS[@]} -gt 0 ]; then
         for DEP in "${UNPROCESSED_DEPS[@]}"; do
             DEP_TO_ADD=''
             for DEP_COMPONENT in ${DEP//:/ }; do
