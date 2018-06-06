@@ -14,7 +14,8 @@ if [ -n "${SHED_PKG_LOCAL_OPTIONS[toolchain]}" ]; then
     install -v -Dm755 "${SHED_PKG_CONTRIB_DIR}/shedmake.sh" "${SHED_FAKE_ROOT}/tools/bin/shedmake" &&
     sed -i "s/#!\/bin\/bash/#!\/tools\/bin\/bash/g" "${SHED_FAKE_ROOT}/tools/bin/shedmake" &&
     sed -i "s/CFGFILE=.*/CFGFILE=\/tools\/etc\/shedmake.conf/g" "${SHED_FAKE_ROOT}/tools/bin/shedmake" &&
-    install -v -Dm644 "${SHED_PKG_CONTRIB_DIR}/shedmake.conf.${SHED_PKG_LOCAL_DEVICE}" "${SHED_FAKE_ROOT}/tools/etc/shedmake.conf"
+    install -v -Dm644 "${SHED_PKG_CONTRIB_DIR}/shedmake.conf.${SHED_PKG_LOCAL_DEVICE}" "${SHED_FAKE_ROOT}/tools/etc/shedmake.conf" &&
+    sed -i "s/OPTIONS=.*/OPTIONS=${SHED_PKG_LOCAL_DEVICE} bootstrap !docs/g" "${SHED_FAKE_ROOT}/tools/etc/shedmake.conf"
 else
     install -v -Dm755 "${SHED_PKG_CONTRIB_DIR}/shedmake.sh" "${SHED_FAKE_ROOT}/usr/bin/shedmake" &&
     install -v -Dm644 "${SHED_PKG_CONTRIB_DIR}/template/.gitignore" "${SHED_FAKE_ROOT}${SHED_PKG_DEFAULTS_INSTALL_DIR}/var/shedmake/template/.gitignore" &&
