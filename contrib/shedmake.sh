@@ -1177,7 +1177,7 @@ shed_install_defaults () {
         done
         shopt -u globstar nullglob dotglob
     fi
-    echo "Available Defaults: $(declare -p DEFAULT_FILES_MAP | sed -e 's/declare -A \w\+=//')"
+    # echo "Available Defaults: $(declare -p DEFAULT_FILES_MAP | sed -e 's/declare -A \w\+=//')"
 
     if [ ${#DEFAULT_FILES_MAP[@]} -gt 0 ]; then
         echo -n "Installing default configuration files..."
@@ -1198,7 +1198,7 @@ shed_install_defaults () {
             RECORDED_DEFAULTS_MAP["${INSTALLED_DEFAULT[0]}"]="${INSTALLED_DEFAULT[1]}"
         done < "$DEFAULTS_LOG_FILE"
     fi
-    echo "Recorded Defaults: $(declare -p RECORDED_DEFAULTS_MAP | sed -e 's/declare -A \w\+=//')"
+    # echo "Recorded Defaults: $(declare -p RECORDED_DEFAULTS_MAP | sed -e 's/declare -A \w\+=//')"
 
     # Iterate through available default files
     for DEFAULT_FILE in "${!DEFAULT_FILES_MAP[@]}"; do
@@ -1224,7 +1224,9 @@ shed_install_defaults () {
         RECORDED_DEFAULTS_MAP["$DEFAULT_FILE"]="${DEFAULT_FILES_MAP["$DEFAULT_FILE"]}" || return 1
     done
     # Write out the updated defaults.bom
-    rm "$DEFAULTS_LOG_FILE"
+    if [ -e "$DEFAULTS_LOG_FILE" ]; then
+        rm "$DEFAULTS_LOG_FILE"
+    fi
     for DEFAULT_FILE in "${!RECORDED_DEFAULTS_MAP[@]}"; do
         echo "$RECORDED_DEFAULTS_MAP ${RECORDED_DEFAULTS_MAP["$DEFAULT_FILE"]}" > "$DEFAULTS_LOG_FILE"
     done
