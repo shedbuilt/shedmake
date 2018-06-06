@@ -1161,8 +1161,8 @@ shed_install_defaults () {
     local FILE_MD5SUM
     local DEFAULTS_LOG_FILE="${SHED_PKG_LOG_DIR}/defaults.log"
     declare -A DEFAULT_FILES_MAP
-    if [ -d "${SHED_INSTALL_ROOT}${SHED_PKG_DEFAULTS_INSTALL_DIR}" ]; then
-        cd "${SHED_INSTALL_ROOT}${SHED_PKG_DEFAULTS_INSTALL_DIR}"
+    if [ -d "${SHED_INSTALL_ROOT%/}${SHED_PKG_DEFAULTS_INSTALL_DIR}" ]; then
+        cd "${SHED_INSTALL_ROOT%/}${SHED_PKG_DEFAULTS_INSTALL_DIR}"
         shopt -s globstar nullglob dotglob
         for DEFAULT_FILE in **; do
             if [ -d "$DEFAULT_FILE" ]; then
@@ -1203,10 +1203,10 @@ shed_install_defaults () {
     # Iterate through available default files
     for DEFAULT_FILE in "${!DEFAULT_FILES_MAP[@]}"; do
         # For each, see if there's a corresponding file on disk
-        FILE_MD5SUM="$(shed_md5sum_of_file ${SHED_INSTALL_ROOT}${DEFAULT_FILE})"
+        FILE_MD5SUM="$(shed_md5sum_of_file ${SHED_INSTALL_ROOT%/}/${DEFAULT_FILE})"
         if [ $? -eq 1 ]; then
             # Exit on errors other than missing file
-            echo "Error checking md5sum of potentially installed default file at: '${SHED_INSTALL_ROOT}${DEFAULT_FILE}'"
+            echo "Error checking md5sum of potentially installed default file at: '${SHED_INSTALL_ROOT%/}/${DEFAULT_FILE}'"
             return 1
         fi
         if [ "${RECORDED_DEFAULTS_MAP[$DEFAULT_FILE]}" != "$FILE_MD5SUM" ]; then
@@ -1220,7 +1220,7 @@ shed_install_defaults () {
         local DEFAULT_TO_INSTALL="${SHED_INSTALL_ROOT%/}${SHED_PKG_DEFAULTS_INSTALL_DIR}/${DEFAULT_FILE}"
         local FILE_PERMISSIONS
         FILE_PERMISSIONS=$(stat -c "%a" "$DEFAULT_TO_INSTALL") &&
-        install -vDm${FILE_PERMISSIONS} "$DEFAULT_TO_INSTALL" "${SHED_INSTALL_ROOT}${DEFAULT_FILE}" 1>&3 2>&4 &&
+        install -vDm${FILE_PERMISSIONS} "$DEFAULT_TO_INSTALL" "${SHED_INSTALL_ROOT%/}/${DEFAULT_FILE}" 1>&3 2>&4 &&
         RECORDED_DEFAULTS_MAP["$DEFAULT_FILE"]="${DEFAULT_FILES_MAP["$DEFAULT_FILE"]}" || return 1
     done
     # Write out the updated defaults.bom
