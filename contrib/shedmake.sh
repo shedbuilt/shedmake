@@ -1228,7 +1228,7 @@ shed_install_defaults () {
         rm "$DEFAULTS_LOG_FILE"
     fi
     for DEFAULT_FILE in "${!RECORDED_DEFAULTS_MAP[@]}"; do
-        echo "$RECORDED_DEFAULTS_MAP ${RECORDED_DEFAULTS_MAP["$DEFAULT_FILE"]}" > "$DEFAULTS_LOG_FILE"
+        echo "$DEFAULT_FILE ${RECORDED_DEFAULTS_MAP["$DEFAULT_FILE"]}" >> "$DEFAULTS_LOG_FILE"
     done
     if ! $VERBOSE; then echo 'done'; fi
 }
