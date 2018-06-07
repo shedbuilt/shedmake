@@ -8,4 +8,4 @@ RELEASE=blank
 CPU_CORE=cortex-a53
 CPU_FEATURES=crypto
 NATIVE_TARGET=aarch64-unknown-linux-gnu
-OPTIONS=orangepi-pc2 release docs
+OPTIONS=orangepipc2 release docs
