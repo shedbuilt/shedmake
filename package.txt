@@ -5,5 +5,5 @@ LICENSE=MIT
 STRIP=no
 PURGE=yes
 BINFILE=${SHED_PKG_NAME}_${SHED_PKG_VERSION_TRIPLET}_${SHED_RELEASE}.${SHED_BINARY_ARCHIVE_EXT}
-OPTIONS=toolchain|bootstrap|release nanopi-k1-plus|nanopi-neo2|nanopi-neo-plus2|orangepi-pc2|all-h3-cc|nanopi-neo|nanopi-m1-plus|orangepi-one|orangepi-pc|orangepi-lite|aml-s905x-cc
+OPTIONS=toolchain|bootstrap|release nanopineo2|nanopineoplus2|orangepipc2|allh3cc|nanopineo|nanopim1plus|orangepione|orangepipc|orangepilite|amls905xcc
 DEFAULTS=release
