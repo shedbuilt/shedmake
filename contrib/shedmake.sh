@@ -1639,14 +1639,7 @@ shed_command () {
                     fi
                     ;;
             esac
-            case "$DEP_CMD_ACTION" in
-                install)
-                    echo "Shedmake is preparing to install '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET) to ${SHED_INSTALL_ROOT}..."
-                    ;;
-                upgrade)
-                    echo "Shedmake is preparing to upgrade '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET) on ${SHED_INSTALL_ROOT}..."
-                    ;;
-            esac
+            echo "Shedmake is preparing to $DEP_CMD_ACTION '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET) on ${SHED_INSTALL_ROOT}..."
             shed_resolve_dependencies INSTALL_DEPS "$DEP_CMD_ACTION" "$DEP_CMD_ACTION" 'true' &&
             shed_install &&
             shed_resolve_dependencies DEFERRED_DEPS 'deferred' "$DEP_CMD_ACTION" 'false' || return $?
@@ -1721,7 +1714,6 @@ shed_command () {
                 return 1
             fi
             shed_read_package_meta "$1" &&
-            shed_configure_options &&
             shed_package_status
             ;;
         update-repo|update-repo-list)
