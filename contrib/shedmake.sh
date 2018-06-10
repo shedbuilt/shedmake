@@ -116,6 +116,7 @@ shed_load_defaults () {
     SHOULD_STRIP=true
     SHOULD_REQUIRE_ROOT=false
     DEFERRED_DEPS=( )
+    unset PACKAGE_OPTIONS_MAP
     export SHED_BUILD_TARGET="$SHED_NATIVE_TARGET"
     export SHED_BUILD_HOST="$SHED_NATIVE_TARGET"
     export SHED_INSTALL_ROOT='/'
