@@ -432,6 +432,7 @@ shed_read_package_meta () {
     export SHED_PKG_NAME=$(sed -n 's/^NAME=//p' ${PKGMETAFILE})
     export SHED_PKG_VERSION=$(sed -n 's/^VERSION=//p' ${PKGMETAFILE})
     export SHED_PKG_REVISION=$(sed -n 's/^REVISION=//p' ${PKGMETAFILE})
+    export SHED_PKG_VERSION_TUPLE=${SHED_PKG_NAME}-${SHED_PKG_VERSION}
     WORKDIR="${TMPDIR%/}/${SHED_PKG_NAME}"
     export SHED_FAKE_ROOT="${WORKDIR}/fakeroot"
     SRC=$(sed -n 's/^SRC=//p' ${PKGMETAFILE})
@@ -1323,15 +1324,16 @@ shed_clean_all () {
 shed_package_status () {
     # NOTE: Reserve retval 1 for packages not found in managed repositories
     if [ -n "$SHED_PKG_INSTALLED_VERSION_TRIPLET" ]; then
-        if [ "$SHED_PKG_VERSION_TRIPLET" == "$SHED_PKG_INSTALLED_VERSION_TRIPLET" ]; then
+        local VERSION_TRIPLET_PREFIX="${SHED_PKG_VERSION_TUPLE}-"
+        if [ "${SHED_PKG_INSTALLED_VERSION_TRIPLET:0:${#VERSION_TRIPLET_PREFIX}}" == "$VERSION_TRIPLET_PREFIX" ]; then
             echo "Package '$SHED_PKG_NAME' is installed and up-to-date ($SHED_PKG_INSTALLED_VERSION_TRIPLET)"
             return 0
         else
-            echo "Package '$SHED_PKG_NAME' ($SHED_PKG_INSTALLED_VERSION_TRIPLET) is installed but $SHED_PKG_VERSION_TRIPLET is available"
+            echo "Package '$SHED_PKG_NAME' $SHED_PKG_INSTALLED_VERSION_TRIPLET is installed but $SHED_PKG_VERSION_TUPLE is available"
             return 10
         fi
     else
-        echo "Package '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET) is available but not installed"
+        echo "Package '$SHED_PKG_NAME' $SHED_PKG_VERSION_TUPLE is available but not installed"
         return 11
     fi
 }
@@ -1358,7 +1360,7 @@ shed_repo_status_at_path () {
         fi
         if [ "$PKGSTATUS" -eq 10 ]; then
             ((++NUMUPDATES))
-            PKGSWITHUPDATES+=( "'$SHED_PKG_NAME' ($SHED_PKG_INSTALLED_VERSION_TRIPLET) -> $SHED_PKG_VERSION_TRIPLET" )
+            PKGSWITHUPDATES+=( "'$SHED_PKG_NAME' ($SHED_PKG_INSTALLED_VERSION_TRIPLET) -> $SHED_PKG_VERSION_TUPLE" )
         fi
         ((++NUMPKGS))
     done
@@ -1613,7 +1615,7 @@ shed_command () {
                     DEP_CMD_ACTION='install'
                     if [ $PKGSTATUS -eq 0 ] || [ $PKGSTATUS -eq 10 ]; then
                         if ! $FORCE_ACTION; then
-                            echo "Package '$SHED_PKG_NAME' (${SHED_PKG_INSTALLED_VERSION_TRIPLET}) is already installed"
+                            echo "Package '$SHED_PKG_NAME' is already installed (${SHED_PKG_INSTALLED_VERSION_TRIPLET})"
                             return 0
                         fi
                     elif [ $PKGSTATUS -ne 11 ]; then
