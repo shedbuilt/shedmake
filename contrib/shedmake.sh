@@ -432,7 +432,7 @@ shed_read_package_meta () {
     export SHED_PKG_NAME=$(sed -n 's/^NAME=//p' ${PKGMETAFILE})
     export SHED_PKG_VERSION=$(sed -n 's/^VERSION=//p' ${PKGMETAFILE})
     export SHED_PKG_REVISION=$(sed -n 's/^REVISION=//p' ${PKGMETAFILE})
-    export SHED_PKG_VERSION_TUPLE=${SHED_PKG_NAME}-${SHED_PKG_VERSION}
+    export SHED_PKG_VERSION_TUPLE=${SHED_PKG_VERSION}-${SHED_PKG_REVISION}
     WORKDIR="${TMPDIR%/}/${SHED_PKG_NAME}"
     export SHED_FAKE_ROOT="${WORKDIR}/fakeroot"
     SRC=$(sed -n 's/^SRC=//p' ${PKGMETAFILE})
@@ -1760,7 +1760,7 @@ trap shed_cleanup SIGINT SIGTERM
 # Check for -list action prefix
 if [ $# -gt 0 ] && [ "${1: -5}" = '-list' ]; then
     if [ $# -lt 2 ]; then
-        echo "Too few arguments to list-based action. Expected: shedmake <list action> <list file> <option 1> ..."
+        echo "Too few arguments to list-based action. Expected: shedmake <list-action> <list-file> [<options>] ..."
         exit 1
     elif [ ! -r "$2" ]; then
         echo "Unable to read from list file: '$2'"
