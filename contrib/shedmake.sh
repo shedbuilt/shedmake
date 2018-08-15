@@ -24,7 +24,7 @@ CFGFILE=/etc/shedmake.conf
 
 shed_cleanup () {
     if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
-        cd "$TMPDIR"
+        cd "$TMPDIR" || return 1
         rm -rf "$WORKDIR"
     fi
 }
@@ -89,8 +89,6 @@ shed_load_config () {
     LOCAL_REPO_DIR="$(sed -n 's/^LOCAL_REPO_DIR=//p' $CFGFILE)"
     REMOTE_REPO_DIR="$(sed -n 's/^REMOTE_REPO_DIR=//p' $CFGFILE)"
     TEMPLATE_DIR="$(sed -n 's/^TEMPLATE_DIR=//p' $CFGFILE)"
-    DEFAULT_CACHE_SOURCE=$(shed_parse_yes_no "$(sed -n 's/^CACHE_SRC=//p' $CFGFILE)")
-    DEFAULT_CACHE_BINARY=$(shed_parse_yes_no "$(sed -n 's/^CACHE_BIN=//p' $CFGFILE)")
     DEFAULT_COMPRESSION="$(sed -n 's/^COMPRESSION=//p' $CFGFILE)"
     DEFAULT_NUMJOBS="$(sed -n 's/^NUM_JOBS=//p' $CFGFILE)"
     read -ra DEFAULT_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' $CFGFILE)
@@ -121,7 +119,7 @@ shed_load_defaults () {
     export SHED_BUILD_HOST="$SHED_NATIVE_TARGET"
     export SHED_INSTALL_ROOT='/'
     export SHED_NUM_JOBS="$DEFAULT_NUMJOBS"
-    export SHED_OPTIONS="${DEFAULT_OPTIONS[@]}"
+    export SHED_OPTIONS=( "${DEFAULT_OPTIONS[@]}" )
     REPO_BRANCH="$SHED_RELEASE"
     shed_set_binary_archive_compression "$DEFAULT_COMPRESSION"
     shed_set_output_verbosity $VERBOSE
@@ -153,7 +151,7 @@ shed_locate_package () {
     if [ -z "$PKGDIR" ]; then
         return 1
     else
-        echo $PKGDIR
+        echo "$PKGDIR"
     fi
 }
 
@@ -169,7 +167,7 @@ shed_locate_repo () {
     if [ -z "$REPODIR" ]; then
         return 1
     else
-        echo $REPODIR
+        echo "$REPODIR"
     fi
 }
 
@@ -222,8 +220,7 @@ shed_parse_args () {
                     SHED_OPTIONS=( "$OPTVAL" )
                     ;;
                 -p|--purge)
-                    SHOULD_PURGE=$(shed_parse_yes_no "$OPTVAL")
-                    if [ $? -ne 0 ]; then
+                    if ! SHOULD_PURGE=$(shed_parse_yes_no "$OPTVAL"); then
                         echo "Invalid argument for '$OPTION' Please specify 'yes' or 'no'"
                         return 1
                     fi
@@ -238,8 +235,7 @@ shed_parse_args () {
                     REPONAME="$OPTVAL"
                     ;;
                 -s|--strip)
-                    SHOULD_STRIP=$(shed_parse_yes_no "$OPTVAL")
-                    if [ $? -ne 0 ]; then
+                    if ! SHOULD_STRIP=$(shed_parse_yes_no "$OPTVAL"); then
                         echo "Invalid argument for '$OPTION' Please specify 'yes' or 'no'"
                         return 1
                     fi
@@ -323,12 +319,12 @@ shed_configure_options () {
     local OPTION
 
     # Populate temporary package options map
-    for OPTION in ${DEFAULT_PACKAGE_OPTIONS[@]}; do
+    for OPTION in "${DEFAULT_PACKAGE_OPTIONS[@]}"; do
         TEMP_PACKAGE_OPTIONS["$OPTION"]="$OPTION"
     done
 
     # Process user-chosen options and exclusions
-    for OPTION in ${SHED_OPTIONS[@]}; do
+    for OPTION in "${SHED_OPTIONS[@]}"; do
         if [ "${OPTION:0:1}" == '!' ]; then
             unset TEMP_PACKAGE_OPTIONS["${OPTION:1}"]
         else
@@ -337,12 +333,12 @@ shed_configure_options () {
     done
 
     # Append default package options
-    for OPTION in ${!TEMP_PACKAGE_OPTIONS[@]}; do
+    for OPTION in "${!TEMP_PACKAGE_OPTIONS[@]}"; do
         TEMP_SELECTED_OPTIONS+=( "$OPTION" )
     done
 
     # Populate temporary supported package options map
-    for OPTION in ${SUPPORTED_PACKAGE_OPTIONS[@]}; do
+    for OPTION in "${SUPPORTED_PACKAGE_OPTIONS[@]}"; do
         if [ ${#OPTION} -gt 2 ] && [ "${OPTION:0:1}" == '(' ] && [ "${OPTION: -1}" == ')' ]; then
             OPTION="${OPTION:1:$(expr ${#OPTION} - 2)}"
         fi
@@ -353,7 +349,7 @@ shed_configure_options () {
     done
 
     # Intersect desired and supported options
-    for OPTION in ${TEMP_SELECTED_OPTIONS[@]}; do
+    for OPTION in "${TEMP_SELECTED_OPTIONS[@]}"; do
         local OPTION_VALUE="${TEMP_SUPPORTED_OPTIONS[$OPTION]}"
         local OPTION_TO_ADD="$OPTION"
         local SUBOPTION
@@ -373,7 +369,7 @@ shed_configure_options () {
 
     # Validate options
     local OPTION_SATISFIED
-    for OPTION in ${SUPPORTED_PACKAGE_OPTIONS[@]}; do
+    for OPTION in "${SUPPORTED_PACKAGE_OPTIONS[@]}"; do
         if [ ${#OPTION} -gt 2 ] && [ "${OPTION:0:1}" == '(' ] && [ "${OPTION: -1}" == ')' ]; then
             continue
         else
@@ -394,7 +390,7 @@ shed_configure_options () {
 
     export SHED_PKG_OPTIONS="${!PACKAGE_OPTIONS_MAP[@]}"
     export SHED_PKG_OPTIONS_ASSOC=$(declare -p PACKAGE_OPTIONS_MAP | sed -e 's/declare -A \w\+=//')
-    local SORTED_OPTIONS=($(for OPTION in ${SHED_PKG_OPTIONS[@]}; do echo $OPTION; done | LC_ALL=C sort))
+    local SORTED_OPTIONS=($(for OPTION in "${SHED_PKG_OPTIONS[@]}"; do echo $OPTION; done | LC_ALL=C sort))
     local DELIMITED_SORTED_OPTIONS="${SORTED_OPTIONS[@]}"
     if [ -n "$DELIMITED_SORTED_OPTIONS" ]; then
         DELIMITED_SORTED_OPTIONS="${DELIMITED_SORTED_OPTIONS// /-}"
@@ -423,46 +419,46 @@ shed_read_package_meta () {
     export SHED_PKG_CONTRIB_DIR="${SHED_PKG_DIR}/contrib"
     export SHED_PKG_LOG_DIR="${SHED_PKG_DIR}/install"
 
-    if [ ! -r ${PKGMETAFILE} ]; then
+    if [ ! -r "$PKGMETAFILE" ]; then
         echo "Cannot read from package.txt in package directory $SHED_PKG_DIR"
         return 1
     fi
 
     # Package Metadata
-    export SHED_PKG_NAME=$(sed -n 's/^NAME=//p' ${PKGMETAFILE})
-    export SHED_PKG_VERSION=$(sed -n 's/^VERSION=//p' ${PKGMETAFILE})
-    export SHED_PKG_REVISION=$(sed -n 's/^REVISION=//p' ${PKGMETAFILE})
-    export SHED_PKG_VERSION_TUPLE=${SHED_PKG_VERSION}-${SHED_PKG_REVISION}
+    export SHED_PKG_NAME=$(sed -n 's/^NAME=//p' "$PKGMETAFILE")
+    export SHED_PKG_VERSION=$(sed -n 's/^VERSION=//p' "$PKGMETAFILE")
+    export SHED_PKG_REVISION=$(sed -n 's/^REVISION=//p' "$PKGMETAFILE")
+    export SHED_PKG_VERSION_TUPLE="${SHED_PKG_VERSION}-${SHED_PKG_REVISION}"
     WORKDIR="${TMPDIR%/}/${SHED_PKG_NAME}"
     export SHED_FAKE_ROOT="${WORKDIR}/fakeroot"
-    SRC=$(sed -n 's/^SRC=//p' ${PKGMETAFILE})
-    SRCFILE=$(sed -n 's/^SRCFILE=//p' ${PKGMETAFILE})
+    SRC=$(sed -n 's/^SRC=//p' "$PKGMETAFILE")
+    SRCFILE=$(sed -n 's/^SRCFILE=//p' "$PKGMETAFILE")
     if [ -z "$SRCFILE" ] && [ -n "$SRC" ]; then
         SRCFILE=$(basename $SRC)
     fi
-    REPOREF=$(sed -n 's/^REF=//p' ${PKGMETAFILE})
-    SRCMD5=$(sed -n 's/^SRCMD5=//p' ${PKGMETAFILE})
-    if [ "$(sed -n 's/^STRIP=//p' ${PKGMETAFILE})" = 'no' ]; then
+    REPOREF=$(sed -n 's/^REF=//p' "$PKGMETAFILE")
+    SRCMD5=$(sed -n 's/^SRCMD5=//p' "$PKGMETAFILE")
+    if [ "$(sed -n 's/^STRIP=//p' $PKGMETAFILE)" = 'no' ]; then
         SHOULD_STRIP=false
     fi
-    if [ "$(sed -n 's/^PURGE=//p' ${PKGMETAFILE})" = 'yes' ]; then
+    if [ "$(sed -n 's/^PURGE=//p' $PKGMETAFILE)" = 'yes' ]; then
         SHOULD_PURGE=true
     fi
-    BIN=$(sed -n 's/^BIN=//p' ${PKGMETAFILE})
-    BINFILE=$(sed -n 's/^BINFILE=//p' ${PKGMETAFILE})
+    BIN=$(sed -n 's/^BIN=//p' "$PKGMETAFILE")
+    BINFILE=$(sed -n 's/^BINFILE=//p' "$PKGMETAFILE")
     if [ -z "$BINFILE" ] && [ -n "$BIN" ]; then
         BINFILE=$(basename $BIN)
     fi
-    read -ra LICENSE <<< $(sed -n 's/^LICENSE=//p' ${PKGMETAFILE})
+    read -ra LICENSE <<< $(sed -n 's/^LICENSE=//p' "$PKGMETAFILE")
 
     # Parse dependencies
-    read -ra BUILD_DEPS <<< $(sed -n 's/^BUILDDEPS=//p' ${PKGMETAFILE})
-    read -ra INSTALL_DEPS <<< $(sed -n 's/^INSTALLDEPS=//p' ${PKGMETAFILE})
-    read -ra RUN_DEPS <<< $(sed -n 's/^RUNDEPS=//p' ${PKGMETAFILE})
+    read -ra BUILD_DEPS <<< $(sed -n 's/^BUILDDEPS=//p' "$PKGMETAFILE")
+    read -ra INSTALL_DEPS <<< $(sed -n 's/^INSTALLDEPS=//p' "$PKGMETAFILE")
+    read -ra RUN_DEPS <<< $(sed -n 's/^RUNDEPS=//p' "$PKGMETAFILE")
 
     #Parse package options
-    read -ra SUPPORTED_PACKAGE_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' ${PKGMETAFILE})
-    read -ra DEFAULT_PACKAGE_OPTIONS <<< $(sed -n 's/^DEFAULTS=//p' ${PKGMETAFILE})
+    read -ra SUPPORTED_PACKAGE_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' "$PKGMETAFILE")
+    read -ra DEFAULT_PACKAGE_OPTIONS <<< $(sed -n 's/^DEFAULTS=//p' "$PKGMETAFILE")
 
     export SHED_PKG_DOCS_INSTALL_DIR="/usr/share/doc/${SHED_PKG_NAME}-${SHED_PKG_VERSION}"
     export SHED_PKG_DEFAULTS_INSTALL_DIR="/usr/share/defaults/${SHED_PKG_NAME}"
@@ -497,16 +493,16 @@ shed_package_info () {
     fi
     echo "Binary Archive Name:	$(shed_binary_archive_name)"
     if [ -n "$LICENSE" ]; then
-        echo "License(s):		${LICENSE[@]}"
+        echo "License(s):		${LICENSE[*]}"
     fi
     if [ -n "$BUILD_DEPS" ]; then
-        echo "Build Dependencies:	${BUILD_DEPS[@]}"
+        echo "Build Dependencies:	${BUILD_DEPS[*]}"
     fi
     if [ -n "$INSTALL_DEPS" ]; then
-        echo "Install Dependencies:	${INSTALL_DEPS[@]}"
+        echo "Install Dependencies:	${INSTALL_DEPS[*]}"
     fi
     if [ -n "$RUN_DEPS" ]; then
-        echo "Runtime Dependencies:	${RUN_DEPS[@]}"
+        echo "Runtime Dependencies:	${RUN_DEPS[*]}"
     fi
     if [ -n "$SHED_PKG_INSTALLED_VERSION_TRIPLET" ]; then
         echo "Installed Version:	$SHED_PKG_INSTALLED_VERSION_TRIPLET"
@@ -749,7 +745,6 @@ shed_run_chroot_script () {
     SHED_PKG_OPTIONS="${SHED_PKG_OPTIONS[@]}" \
     SHED_PKG_OPTIONS_ASSOC="$SHED_PKG_OPTIONS_ASSOC" \
     SHED_PKG_INSTALL_BOM="${2}/install/${SHED_PKG_VERSION_TRIPLET}.bom" \
-    SHED_PKG_INSTALL_LOG="$SHED_PKG_INSTALL_LOG" \
     SHED_PKG_INSTALLED_VERSION_TRIPLET="$SHED_PKG_INSTALLED_VERSION_TRIPLET" \
     bash "${2}/${3}" 1>&3 2>&4
 }
@@ -1351,8 +1346,7 @@ shed_repo_status_at_path () {
         if [ ! -d "$PACKAGE" ]; then
             continue
         fi
-        shed_read_package_meta "$PACKAGE" &&
-        shed_configure_options || exit 1
+        shed_read_package_meta "$PACKAGE" || return 1
         shed_package_status 1>&3 2>&4
         PKGSTATUS=$?
         if [ "$PKGSTATUS" -ne 11 ]; then
@@ -1476,7 +1470,7 @@ shed_push_package () {
 shed_push_repo () {
     local NEWTAG
     local LASTTAG="$(git describe --tags)"
-    if [ -n "LASTTAG" ]; then
+    if [ -n "$LASTTAG" ]; then
         NEWTAG="${SHED_RELEASE}-$(($(echo $LASTTAG | sed 's/.*-\([0-9]*\)$/\1/') + 1))"
     else
         NEWTAG="${SHED_RELEASE}-1"
@@ -1594,7 +1588,6 @@ shed_command () {
             shed_read_package_meta "$1" &&
             shift &&
             shed_parse_args "$@" &&
-            shed_configure_options &&
             shed_package_info
             ;;
         install|install-list|upgrade|upgrade-list)
@@ -1767,18 +1760,24 @@ if [ $# -gt 0 ] && [ "${1: -5}" = '-list' ]; then
         exit 1
     fi
     shed_load_config || return $?
-    LISTWD="$(pwd)"
-    LISTCMD="$1"; shift
-    SMLFILE=$(readlink -f -n "$1"); shift
-    while read -ra SMLARGS
+    SHED_LIST_CMD_RETVAL=0
+    SHED_LIST_WD="$(pwd)"
+    SHED_LIST_CMD="$1"; shift
+    SHED_LIST_FILE=$(readlink -f -n "$1"); shift
+    while read -ra SHED_LIST_ARGS
     do
-        if [[ "$SMLARGS" =~ ^#.* ]]; then
+        if [[ "$SHED_LIST_ARGS" =~ ^#.* ]]; then
             continue
         fi
-        PKGARGS=( "$LISTCMD" ${SMLARGS[@]} "$@" )
-        shed_command "${PKGARGS[@]}" || exit $?
-        cd "$LISTWD"
-    done < "$SMLFILE"
+        SHED_LIST_CMD_ARGS=( "$SHED_LIST_CMD" ${SHED_LIST_ARGS[@]} "$@" )
+        shed_command "${SHED_LIST_CMD_ARGS[@]}"
+        SHED_LIST_CMD_RETVAL=$?
+        if [ $SHED_LIST_CMD_RETVAL -ne 0 ]; then
+            echo "Aborting remaining list commands due to error: $SHED_LIST_CMD_RETVAL"
+            exit 1
+        fi
+        cd "$SHED_LIST_WD" || exit 1
+    done < "$SHED_LIST_FILE"
 else
     shed_load_config &&
     shed_command "$@"
