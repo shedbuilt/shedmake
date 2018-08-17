@@ -217,7 +217,7 @@ shed_parse_args () {
                     SHED_BUILD_HOST="$OPTVAL"
                     ;;
                 -o|--options)
-                    SHED_OPTIONS=( "$OPTVAL" )
+                    SHED_OPTIONS=( $OPTVAL )
                     ;;
                 -p|--purge)
                     if ! SHOULD_PURGE=$(shed_parse_yes_no "$OPTVAL"); then
