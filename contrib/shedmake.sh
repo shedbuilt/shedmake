@@ -331,7 +331,7 @@ shed_configure_options () {
         OPTIONS_TO_ALIAS=''
         OPTION_ALIAS=''
         for ALIAS_COMPONENT in ${ALIAS//:/ }; do
-            if [ -n "$OPTIONS_TO_ALIAS" ]; then
+            if [ -z "$OPTIONS_TO_ALIAS" ]; then
                 OPTIONS_TO_ALIAS=$ALIAS_COMPONENT
             else
                 OPTION_ALIAS=$ALIAS_COMPONENT
@@ -340,7 +340,7 @@ shed_configure_options () {
                 done
             fi
         done
-        if [ -n "$OPTION_ALIAS" ]; then
+        if [ -z "$OPTION_ALIAS" ]; then
             echo "Invalid syntax in aliased package options: '$ALIAS'"
             return 1
         fi
@@ -361,18 +361,17 @@ shed_configure_options () {
     done
 
     # Append default package options
-    for OPTION in "${TEMP_SELECTED_OPTIONS[@]}"; do
-        if
+    for OPTION in "${!TEMP_PACKAGE_OPTIONS[@]}"; do
         TEMP_SELECTED_OPTIONS+=( "$OPTION" )
     done
 
     # Append aliased options
-    for OPTION in "${!TEMP_PACKAGE_OPTIONS[@]}"; do
+    for OPTION in "${TEMP_SELECTED_OPTIONS[@]}"; do
         if [ -n "${ALIASED_OPTIONS_MAP[$OPTION]}" ]; then
             TEMP_ALIASED_OPTIONS+=( "${ALIASED_OPTIONS_MAP[$OPTION]}" )
         fi
     done
-    TEMP_SELECTED_OPTIONS+=TEMP_ALIASED_OPTIONS
+    TEMP_SELECTED_OPTIONS+=( "${TEMP_ALIASED_OPTIONS[@]}" )
 
     # Populate temporary supported package options map
     for OPTION in "${SUPPORTED_PACKAGE_OPTIONS[@]}"; do
@@ -422,10 +421,10 @@ shed_configure_options () {
         fi
     done
 
-    export SHED_PKG_OPTIONS="${!PACKAGE_OPTIONS_MAP[@]}"
-    export SHED_PKG_OPTIONS_ASSOC=$(declare -p PACKAGE_OPTIONS_MAP | sed -e 's/declare -A \w\+=//')
-    local SORTED_OPTIONS=($(for OPTION in "${SHED_PKG_OPTIONS[@]}"; do echo $OPTION; done | LC_ALL=C sort))
-    local DELIMITED_SORTED_OPTIONS="${SORTED_OPTIONS[@]}"
+    declare -ga SHED_PKG_OPTIONS=( "${!PACKAGE_OPTIONS_MAP[@]}" )
+    export SHED_PKG_OPTIONS_ASSOC="$(declare -p PACKAGE_OPTIONS_MAP | sed -e 's/declare -A \w\+=//')"
+    declare -a SORTED_OPTIONS=($(for OPTION in "${SHED_PKG_OPTIONS[@]}"; do echo $OPTION; done | LC_ALL=C sort))
+    local DELIMITED_SORTED_OPTIONS="${SORTED_OPTIONS[*]}"
     if [ -n "$DELIMITED_SORTED_OPTIONS" ]; then
         DELIMITED_SORTED_OPTIONS="${DELIMITED_SORTED_OPTIONS// /-}"
     else
