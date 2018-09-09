@@ -8,4 +8,4 @@ RELEASE=blank
 CPU_CORE=cortex-a7
 CPU_FEATURES=neon-vfpv4
 NATIVE_TARGET=armv7l-unknown-linux-gnueabihf
-OPTIONS=nanopineo release docs
+OPTIONS=nanopineo headless release docs

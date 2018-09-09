@@ -115,6 +115,7 @@ shed_load_defaults () {
     SHOULD_REQUIRE_ROOT=false
     DEFERRED_DEPS=( )
     unset PACKAGE_OPTIONS_MAP
+    declare -gA PACKAGE_OPTIONS_MAP
     export SHED_BUILD_TARGET="$SHED_NATIVE_TARGET"
     export SHED_BUILD_HOST="$SHED_NATIVE_TARGET"
     export SHED_INSTALL_ROOT='/'
@@ -312,11 +313,38 @@ shed_parse_args () {
 }
 
 shed_configure_options () {
-    declare -gA PACKAGE_OPTIONS_MAP
     declare -A TEMP_PACKAGE_OPTIONS
     declare -A TEMP_SUPPORTED_OPTIONS
+    declare -a TEMP_ALIASED_OPTIONS
+    declare -A ALIASED_OPTIONS_MAP
     declare -a TEMP_SELECTED_OPTIONS
     local OPTION
+    local SUBOPTION
+
+    # Populate option aliases map
+    local ALIAS
+    local OPTION_ALIAS
+    local OPTIONS_TO_ALIAS
+    for ALIAS in "${ALIASED_PACKAGE_OPTIONS[@]}"; do
+        local ALIASED_OPTION
+        local ALIAS_COMPONENT
+        OPTIONS_TO_ALIAS=''
+        OPTION_ALIAS=''
+        for ALIAS_COMPONENT in ${ALIAS//:/ }; do
+            if [ -n "$OPTIONS_TO_ALIAS" ]; then
+                OPTIONS_TO_ALIAS=$ALIAS_COMPONENT
+            else
+                OPTION_ALIAS=$ALIAS_COMPONENT
+                for ALIASED_OPTION in ${OPTIONS_TO_ALIAS//|/ }; do
+                    ALIASED_OPTIONS_MAP["$ALIASED_OPTION"]="$OPTION_ALIAS"
+                done
+            fi
+        done
+        if [ -n "$OPTION_ALIAS" ]; then
+            echo "Invalid syntax in aliased package options: '$ALIAS'"
+            return 1
+        fi
+    done
 
     # Populate temporary package options map
     for OPTION in "${DEFAULT_PACKAGE_OPTIONS[@]}"; do
@@ -333,16 +361,24 @@ shed_configure_options () {
     done
 
     # Append default package options
-    for OPTION in "${!TEMP_PACKAGE_OPTIONS[@]}"; do
+    for OPTION in "${TEMP_SELECTED_OPTIONS[@]}"; do
+        if
         TEMP_SELECTED_OPTIONS+=( "$OPTION" )
     done
+
+    # Append aliased options
+    for OPTION in "${!TEMP_PACKAGE_OPTIONS[@]}"; do
+        if [ -n "${ALIASED_OPTIONS_MAP[$OPTION]}" ]; then
+            TEMP_ALIASED_OPTIONS+=( "${ALIASED_OPTIONS_MAP[$OPTION]}" )
+        fi
+    done
+    TEMP_SELECTED_OPTIONS+=TEMP_ALIASED_OPTIONS
 
     # Populate temporary supported package options map
     for OPTION in "${SUPPORTED_PACKAGE_OPTIONS[@]}"; do
         if [ ${#OPTION} -gt 2 ] && [ "${OPTION:0:1}" == '(' ] && [ "${OPTION: -1}" == ')' ]; then
             OPTION="${OPTION:1:$(expr ${#OPTION} - 2)}"
         fi
-        local SUBOPTION
         for SUBOPTION in ${OPTION//|/ }; do
             TEMP_SUPPORTED_OPTIONS["$SUBOPTION"]="$OPTION"
         done
@@ -352,7 +388,6 @@ shed_configure_options () {
     for OPTION in "${TEMP_SELECTED_OPTIONS[@]}"; do
         local OPTION_VALUE="${TEMP_SUPPORTED_OPTIONS[$OPTION]}"
         local OPTION_TO_ADD="$OPTION"
-        local SUBOPTION
         if [ -z "$OPTION_VALUE" ]; then
             continue
         fi
@@ -374,7 +409,6 @@ shed_configure_options () {
             continue
         else
             OPTION_SATISFIED=false
-            local SUBOPTION
             for SUBOPTION in ${OPTION//|/ }; do
                 if [ -n "${PACKAGE_OPTIONS_MAP[$SUBOPTION]}" ]; then
                     OPTION_SATISFIED=true
@@ -457,6 +491,7 @@ shed_read_package_meta () {
     read -ra RUN_DEPS <<< $(sed -n 's/^RUNDEPS=//p' "$PKGMETAFILE")
 
     #Parse package options
+    read -ra ALIASED_PACKAGE_OPTIONS <<< $(sed -n 's/^ALIASES=//p' "$PKGMETAFILE")
     read -ra SUPPORTED_PACKAGE_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' "$PKGMETAFILE")
     read -ra DEFAULT_PACKAGE_OPTIONS <<< $(sed -n 's/^DEFAULTS=//p' "$PKGMETAFILE")
 
@@ -732,6 +767,7 @@ shed_run_chroot_script () {
     SHED_NATIVE_TARGET="$SHED_NATIVE_TARGET" \
     SHED_INSTALL_ROOT='/' \
     SHED_NUM_JOBS="$SHED_NUM_JOBS" \
+    SHED_OPTIONS="${SHED_OPTIONS[@]}" \
     SHED_PKG_DIR="$2" \
     SHED_PKG_CONTRIB_DIR="${2}/contrib" \
     SHED_PKG_PATCH_DIR="${2}/patch" \
