@@ -422,7 +422,7 @@ shed_configure_options () {
     done
 
     export SHED_PKG_OPTIONS="${!PACKAGE_OPTIONS_MAP[*]}"
-    export -ga SHED_REQUESTED_OPTIONS="${REQUESTED_OPTIONS[*]}"
+    export SHED_REQUESTED_OPTIONS="${REQUESTED_OPTIONS[*]}"
     export SHED_PKG_OPTIONS_ASSOC="$(declare -p PACKAGE_OPTIONS_MAP | sed -e 's/declare -A \w\+=//')"
     declare -a SORTED_OPTIONS=($(for OPTION in "${!PACKAGE_OPTIONS_MAP[@]}"; do echo $OPTION; done | LC_ALL=C sort))
     local DELIMITED_SORTED_OPTIONS="${SORTED_OPTIONS[*]}"
