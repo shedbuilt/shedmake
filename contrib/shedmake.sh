@@ -114,13 +114,13 @@ shed_load_defaults () {
     SHOULD_STRIP=true
     SHOULD_REQUIRE_ROOT=false
     DEFERRED_DEPS=( )
+    REQUESTED_OPTIONS=( "${DEFAULT_OPTIONS[@]}" )
     unset PACKAGE_OPTIONS_MAP
     declare -gA PACKAGE_OPTIONS_MAP
     export SHED_BUILD_TARGET="$SHED_NATIVE_TARGET"
     export SHED_BUILD_HOST="$SHED_NATIVE_TARGET"
     export SHED_INSTALL_ROOT='/'
     export SHED_NUM_JOBS="$DEFAULT_NUMJOBS"
-    export SHED_OPTIONS=( "${DEFAULT_OPTIONS[@]}" )
     REPO_BRANCH="$SHED_RELEASE"
     shed_set_binary_archive_compression "$DEFAULT_COMPRESSION"
     shed_set_output_verbosity $VERBOSE
@@ -218,7 +218,7 @@ shed_parse_args () {
                     SHED_BUILD_HOST="$OPTVAL"
                     ;;
                 -o|--options)
-                    SHED_OPTIONS=( $OPTVAL )
+                    REQUESTED_OPTIONS=( $OPTVAL )
                     ;;
                 -p|--purge)
                     if ! SHOULD_PURGE=$(shed_parse_yes_no "$OPTVAL"); then
@@ -352,7 +352,7 @@ shed_configure_options () {
     done
 
     # Process user-chosen options and exclusions
-    for OPTION in "${SHED_OPTIONS[@]}"; do
+    for OPTION in "${REQUESTED_OPTIONS[@]}"; do
         if [ "${OPTION:0:1}" == '!' ]; then
             unset TEMP_PACKAGE_OPTIONS["${OPTION:1}"]
         else
@@ -421,9 +421,10 @@ shed_configure_options () {
         fi
     done
 
-    declare -ga SHED_PKG_OPTIONS=( "${!PACKAGE_OPTIONS_MAP[@]}" )
+    export SHED_PKG_OPTIONS="${!PACKAGE_OPTIONS_MAP[*]}"
+    export -ga SHED_REQUESTED_OPTIONS="${REQUESTED_OPTIONS[*]}"
     export SHED_PKG_OPTIONS_ASSOC="$(declare -p PACKAGE_OPTIONS_MAP | sed -e 's/declare -A \w\+=//')"
-    declare -a SORTED_OPTIONS=($(for OPTION in "${SHED_PKG_OPTIONS[@]}"; do echo $OPTION; done | LC_ALL=C sort))
+    declare -a SORTED_OPTIONS=($(for OPTION in "${!PACKAGE_OPTIONS_MAP[@]}"; do echo $OPTION; done | LC_ALL=C sort))
     local DELIMITED_SORTED_OPTIONS="${SORTED_OPTIONS[*]}"
     if [ -n "$DELIMITED_SORTED_OPTIONS" ]; then
         DELIMITED_SORTED_OPTIONS="${DELIMITED_SORTED_OPTIONS// /-}"
@@ -766,7 +767,7 @@ shed_run_chroot_script () {
     SHED_NATIVE_TARGET="$SHED_NATIVE_TARGET" \
     SHED_INSTALL_ROOT='/' \
     SHED_NUM_JOBS="$SHED_NUM_JOBS" \
-    SHED_OPTIONS="${SHED_OPTIONS[*]}" \
+    SHED_REQUESTED_OPTIONS="$SHED_REQUESTED_OPTIONS" \
     SHED_PKG_DIR="$2" \
     SHED_PKG_CONTRIB_DIR="${2}/contrib" \
     SHED_PKG_PATCH_DIR="${2}/patch" \
@@ -777,7 +778,7 @@ shed_run_chroot_script () {
     SHED_PKG_VERSION="$SHED_PKG_VERSION" \
     SHED_PKG_REVISION="$SHED_PKG_REVISION" \
     SHED_PKG_VERSION_TRIPLET="$SHED_PKG_VERSION_TRIPLET" \
-    SHED_PKG_OPTIONS="${SHED_PKG_OPTIONS[*]}" \
+    SHED_PKG_OPTIONS="$SHED_PKG_OPTIONS" \
     SHED_PKG_OPTIONS_ASSOC="$SHED_PKG_OPTIONS_ASSOC" \
     SHED_PKG_INSTALL_BOM="${2}/install/${SHED_PKG_VERSION_TRIPLET}.bom" \
     SHED_PKG_INSTALLED_VERSION_TRIPLET="$SHED_PKG_INSTALLED_VERSION_TRIPLET" \
