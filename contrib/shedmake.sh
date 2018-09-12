@@ -316,35 +316,9 @@ shed_configure_options () {
     declare -A TEMP_PACKAGE_OPTIONS
     declare -A TEMP_SUPPORTED_OPTIONS
     declare -a TEMP_ALIASED_OPTIONS
-    declare -A ALIASED_OPTIONS_MAP
     declare -a TEMP_SELECTED_OPTIONS
     local OPTION
     local SUBOPTION
-
-    # Populate option aliases map
-    local ALIAS
-    local OPTION_ALIAS
-    local OPTIONS_TO_ALIAS
-    for ALIAS in "${ALIASED_PACKAGE_OPTIONS[@]}"; do
-        local ALIASED_OPTION
-        local ALIAS_COMPONENT
-        OPTIONS_TO_ALIAS=''
-        OPTION_ALIAS=''
-        for ALIAS_COMPONENT in ${ALIAS//:/ }; do
-            if [ -z "$OPTIONS_TO_ALIAS" ]; then
-                OPTIONS_TO_ALIAS=$ALIAS_COMPONENT
-            else
-                OPTION_ALIAS=$ALIAS_COMPONENT
-                for ALIASED_OPTION in ${OPTIONS_TO_ALIAS//|/ }; do
-                    ALIASED_OPTIONS_MAP["$ALIASED_OPTION"]="$OPTION_ALIAS"
-                done
-            fi
-        done
-        if [ -z "$OPTION_ALIAS" ]; then
-            echo "Invalid syntax in aliased package options: '$ALIAS'"
-            return 1
-        fi
-    done
 
     # Populate temporary package options map
     for OPTION in "${DEFAULT_PACKAGE_OPTIONS[@]}"; do
@@ -365,12 +339,37 @@ shed_configure_options () {
         TEMP_SELECTED_OPTIONS+=( "$OPTION" )
     done
 
-    # Append aliased options
-    for OPTION in "${TEMP_SELECTED_OPTIONS[@]}"; do
-        if [ -n "${ALIASED_OPTIONS_MAP[$OPTION]}" ]; then
-            TEMP_ALIASED_OPTIONS+=( "${ALIASED_OPTIONS_MAP[$OPTION]}" )
+    # Populate aliased options
+    local ALIAS
+    for ALIAS in "${ALIASED_PACKAGE_OPTIONS[@]}"; do
+        unset ALIASED_OPTIONS_MAP
+        declare -A ALIASED_OPTIONS_MAP
+        local OPTION_ALIAS=''
+        local OPTIONS_TO_ALIAS=''
+        local ALIASED_OPTION
+        local ALIAS_COMPONENT
+        for ALIAS_COMPONENT in ${ALIAS//:/ }; do
+            if [ -z "$OPTIONS_TO_ALIAS" ]; then
+                OPTIONS_TO_ALIAS=$ALIAS_COMPONENT
+            else
+                OPTION_ALIAS=$ALIAS_COMPONENT
+                for ALIASED_OPTION in ${OPTIONS_TO_ALIAS//|/ }; do
+                    ALIASED_OPTIONS_MAP["$ALIASED_OPTION"]="$OPTION_ALIAS"
+                done
+            fi
+        done
+        if [ -z "$OPTION_ALIAS" ]; then
+            echo "Invalid syntax in aliased package options: '$ALIAS'"
+            return 1
         fi
+        for OPTION in "${TEMP_SELECTED_OPTIONS[@]}"; do
+            if [ -n "${ALIASED_OPTIONS_MAP[$OPTION]}" ]; then
+                TEMP_ALIASED_OPTIONS+=( "${ALIASED_OPTIONS_MAP[$OPTION]}" )
+            fi
+        done
     done
+
+    # Append aliased options
     TEMP_SELECTED_OPTIONS+=( "${TEMP_ALIASED_OPTIONS[@]}" )
 
     # Populate temporary supported package options map
