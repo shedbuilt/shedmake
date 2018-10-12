@@ -86,12 +86,13 @@ shed_load_config () {
         return 1
     fi
     TMPDIR="$(sed -n 's/^TMP_DIR=//p' $CFGFILE)"
-    LOCAL_REPO_DIR="$(sed -n 's/^LOCAL_REPO_DIR=//p' $CFGFILE)"
-    REMOTE_REPO_DIR="$(sed -n 's/^REMOTE_REPO_DIR=//p' $CFGFILE)"
+    DEFAULT_LOCAL_REPO_DIR="$(sed -n 's/^LOCAL_REPO_DIR=//p' $CFGFILE)"
+    DEFAULT_REMOTE_REPO_DIR="$(sed -n 's/^REMOTE_REPO_DIR=//p' $CFGFILE)"
     TEMPLATE_DIR="$(sed -n 's/^TEMPLATE_DIR=//p' $CFGFILE)"
     DEFAULT_COMPRESSION="$(sed -n 's/^COMPRESSION=//p' $CFGFILE)"
     DEFAULT_NUMJOBS="$(sed -n 's/^NUM_JOBS=//p' $CFGFILE)"
     read -ra DEFAULT_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' $CFGFILE)
+    read -ra IMPLICIT_BUILD_DEPS <<< $(sed -n 's/^IMPLICIT_BUILDDEPS=//p' "$PKGMETAFILE")
     export SHED_RELEASE="$(sed -n 's/^RELEASE=//p' $CFGFILE)"
     export SHED_CPU_CORE="$(sed -n 's/^CPU_CORE=//p' $CFGFILE)"
     export SHED_CPU_FEATURES="$(sed -n 's/^CPU_FEATURES=//p' $CFGFILE)"
@@ -99,6 +100,12 @@ shed_load_config () {
 }
 
 shed_load_defaults () {
+    if [ -z "$SHED_LOCAL_REPO_DIR" ]; then
+        export SHED_LOCAL_REPO_DIR="$DEFAULT_LOCAL_REPO_DIR"
+    fi
+    if [ -z "$SHED_REMOTE_REPO_DIR" ]; then
+        export SHED_REMOTE_REPO_DIR="$DEFAULT_REMOTE_REPO_DIR"
+    fi
     VERBOSE=false
     FORCE_ACTION=false
     SHOULD_CLEAN_TEMP=true
@@ -140,7 +147,7 @@ shed_locate_package () {
         PKGDIR=$(readlink -f -n "$1")
     else
         local REPO
-        for REPO in "${REMOTE_REPO_DIR}"/* "${LOCAL_REPO_DIR}"/*; do
+        for REPO in "${SHED_LOCAL_REPO_DIR}"/* "${SHED_REMOTE_REPO_DIR}"/*; do
             if [ ! -d "$REPO" ]; then
                 continue
             elif [ -d "${REPO}/${1}" ]; then
@@ -160,10 +167,10 @@ shed_locate_repo () {
     local REPODIR
     if [ -d "$1" ]; then
         REPODIR=$(readlink -f -n "$1")
-    elif [ -d "${REMOTE_REPO_DIR}/${1}" ]; then
-        REPODIR="${REMOTE_REPO_DIR}/${1}"
-    elif [ -d "${LOCAL_REPO_DIR}/${1}" ]; then
-        REPODIR="${LOCAL_REPO_DIR}/${1}"
+    elif [ -d "${SHED_LOCAL_REPO_DIR}/${1}" ]; then
+        REPODIR="${SHED_LOCAL_REPO_DIR}/${1}"
+    elif [ -d "${SHED_REMOTE_REPO_DIR}/${1}" ]; then
+        REPODIR="${SHED_REMOTE_REPO_DIR}/${1}"
     fi
     if [ -z "$REPODIR" ]; then
         return 1
@@ -440,7 +447,7 @@ shed_read_package_meta () {
         return 1
     fi
 
-    if [[ $SHED_PKG_DIR =~ ^$REMOTE_REPO_DIR.* ]]; then
+    if [[ $SHED_PKG_DIR =~ ^$SHED_REMOTE_REPO_DIR.* ]]; then
         # Actions on packages in managed remote repositories always require root privileges
         SHOULD_REQUIRE_ROOT=true
     fi
@@ -785,10 +792,10 @@ shed_run_chroot_script () {
 }
 
 shed_can_add_repo () {
-    if [ -d "${REMOTE_REPO_DIR}/${1}" ]; then
+    if [ -d "${SHED_REMOTE_REPO_DIR}/${1}" ]; then
         echo 'A remote repository named '$1' already exists.'
         return 1
-    elif [ -d "${LOCAL_REPO_DIR}/${1}" ]; then
+    elif [ -d "${SHED_LOCAL_REPO_DIR}/${1}" ]; then
         echo 'A local repository named '$1' already exists.'
         return 1
     fi
@@ -799,12 +806,12 @@ shed_add () {
     if [ -z "$REPONAME" ]; then
         REPONAME="$(basename $REPOFILE .git)"
     fi
-    cd "${LOCAL_REPO_DIR}/${1}" || return 1
+    cd "${SHED_LOCAL_REPO_DIR}/${1}" || return 1
     if [ -d "$REPONAME" ]; then
         echo "A directory named '$REPONAME' is already present in local package repository '${1}'"
         return 1
     fi
-    echo -n "Shedmake will add the package at $REPOURL to the local repository at ${LOCAL_REPO_DIR}/${1}..."
+    echo -n "Shedmake will add the package at $REPOURL to the local repository at ${SHED_LOCAL_REPO_DIR}/${1}..."
     if $VERBOSE; then echo; fi
     git submodule add -b "$REPO_BRANCH" "$REPOURL" 1>&3 2>&4 && \
     git submodule init 1>&3 2>&4 || return 1
@@ -821,8 +828,8 @@ shed_add_repo () {
         REPONAME="$(basename $REPOFILE .git)"
     fi
     shed_can_add_repo "$REPONAME" && \
-    cd "$REMOTE_REPO_DIR" || return 1
-    echo -n "Shedmake will add the repository at $REPOURL to the remote repositories in $REMOTE_REPO_DIR as $REPONAME..."
+    cd "$SHED_REMOTE_REPO_DIR" || return 1
+    echo -n "Shedmake will add the repository at $REPOURL to the remote repositories in $SHED_REMOTE_REPO_DIR as $REPONAME..."
     if $VERBOSE; then echo; fi
     git clone "$REPOURL" "$REPONAME" 1>&3 2>&4 && \
     cd "$REPONAME" && \
@@ -1267,7 +1274,7 @@ shed_install_defaults () {
 
 shed_update_repo_at_path () {
     cd "$1" || return 1
-    if [[ $1 =~ ^$REMOTE_REPO_DIR.* ]]; then
+    if [[ $1 =~ ^$SHED_REMOTE_REPO_DIR.* ]]; then
         if [[ $EUID -ne 0 ]]; then
             echo 'Root privileges are required to update managed remote package repositories.'
             return 1
@@ -1299,7 +1306,7 @@ shed_update_repo () {
 
 shed_update_all () {
     local REPO
-    for REPO in "${REMOTE_REPO_DIR}"/* "${LOCAL_REPO_DIR}"/*; do
+    for REPO in "${SHED_LOCAL_REPO_DIR}"/* "${SHED_REMOTE_REPO_DIR}"/*; do
         shed_update_repo_at_path "$REPO" || return 1
     done
 }
@@ -1339,7 +1346,7 @@ shed_clean_repo () {
 
 shed_clean_all () {
     local REPO
-    for REPO in "${REMOTE_REPO_DIR}"/* "${LOCAL_REPO_DIR}"/*; do
+    for REPO in "${SHED_LOCAL_REPO_DIR}"/* "${SHED_REMOTE_REPO_DIR}"/*; do
         if [ ! -d "${REPO}" ]; then
             continue
         fi
@@ -1440,7 +1447,7 @@ shed_upgrade_repo () {
 
 shed_upgrade_all () {
     local REPO
-    for REPO in "${REMOTE_REPO_DIR}"/* "${LOCAL_REPO_DIR}"/*; do
+    for REPO in "${SHED_LOCAL_REPO_DIR}"/* "${SHED_REMOTE_REPO_DIR}"/*; do
         if [ ! -d "${REPO}" ]; then
             continue
         fi
@@ -1477,9 +1484,9 @@ shed_create () {
 shed_create_repo () {
     echo -n "Shedmake is creating a new local package repository '$1'..."
     if $VERBOSE; then echo; fi
-    mkdir -v "${LOCAL_REPO_DIR}/$1" 1>&3 2>&4 || return 1
+    mkdir -v "${SHED_LOCAL_REPO_DIR}/$1" 1>&3 2>&4 || return 1
     if [ -n "$REPOURL" ]; then
-        cd "${LOCAL_REPO_DIR}/$1" && \
+        cd "${SHED_LOCAL_REPO_DIR}/$1" && \
         git init 1>&3 2>&4 && \
         git remote add origin "$REPOURL" 1>&3 2>&4
     fi
@@ -1552,6 +1559,7 @@ shed_command () {
             shed_parse_args "$@" &&
             shed_configure_options &&
             echo "Shedmake is preparing to build '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET)..." &&
+            shed_resolve_dependencies IMPLICIT_BUILD_DEPS 'implicit build' 'install' 'false' &&
             shed_resolve_dependencies BUILD_DEPS 'build' 'install' 'false' &&
             shed_build
             ;;
