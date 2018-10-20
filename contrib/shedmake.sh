@@ -92,7 +92,7 @@ shed_load_config () {
     DEFAULT_COMPRESSION="$(sed -n 's/^COMPRESSION=//p' $CFGFILE)"
     DEFAULT_NUMJOBS="$(sed -n 's/^NUM_JOBS=//p' $CFGFILE)"
     read -ra DEFAULT_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' $CFGFILE)
-    read -ra IMPLICIT_BUILD_DEPS <<< $(sed -n 's/^IMPLICIT_BUILDDEPS=//p' "$PKGMETAFILE")
+    read -ra IMPLICIT_BUILD_DEPS <<< $(sed -n 's/^IMPLICIT_BUILDDEPS=//p' "$CFGFILE")
     export SHED_RELEASE="$(sed -n 's/^RELEASE=//p' $CFGFILE)"
     export SHED_CPU_CORE="$(sed -n 's/^CPU_CORE=//p' $CFGFILE)"
     export SHED_CPU_FEATURES="$(sed -n 's/^CPU_FEATURES=//p' $CFGFILE)"
@@ -476,7 +476,8 @@ shed_read_package_meta () {
     if [ -z "$SRCFILE" ] && [ -n "$SRC" ]; then
         SRCFILE=$(basename $SRC)
     fi
-    REPOREF=$(sed -n 's/^REF=//p' "$PKGMETAFILE")
+    SRC_REPO_REFSPEC=$(sed -n 's/^REF=//p' "$PKGMETAFILE")
+    REPOCOMMIT=$(sed -n 's/^COMMIT=//p' "$PKGMETAFILE")
     SRCMD5=$(sed -n 's/^SRCMD5=//p' "$PKGMETAFILE")
     if [ "$(sed -n 's/^STRIP=//p' $PKGMETAFILE)" = 'no' ]; then
         SHOULD_STRIP=false
@@ -508,9 +509,17 @@ shed_read_package_meta () {
     if [ -e "$SHED_INSTALL_HISTORY" ]; then
         SHED_PKG_INSTALLED_VERSION_TRIPLET=$(tail -n 1 "$SHED_INSTALL_HISTORY")
     fi
+
+    # Validate package
     if [ -z "$SHED_PKG_NAME" ] || [ -z "$SHED_PKG_VERSION" ] || [ -z "$SHED_PKG_REVISION" ]; then
         echo 'Required fields missing from package metadata.'
         return 1
+    fi
+    if [ -n "$SRC" ] && [ "${SRC: -4}" = '.git' ]; then
+        if [ -z "$SRC_REPO_REFSPEC" ] && [ -z "$REPOCOMMIT" ]; then
+            echo "No refspec or commit provided for git-based source."
+            return 1
+        fi
     fi
 }
 
@@ -524,15 +533,17 @@ shed_package_info () {
     if [ -n "$SRCMD5" ]; then
         echo "Source File MD5SUM:	$SRCMD5"
     fi
-    if [ -n "$REPOREF" ]; then
-        echo "Source Git Refspec:	$REPOREF"
+    if [ -n "$SRC_REPO_REFSPEC" ]; then
+        echo "Source Git Refspec:	$SRC_REPO_REFSPEC"
     fi
-    if [ -n "$BIN" ]; then
-        echo "Binary Archive URL (Raw):	$BIN"
-        local BINURL=$(eval echo "$BIN")
-        echo "Binary Archive URL:	$BINURL"
+    if [ -n "$REPOCOMMIT" ]; then
+        echo "Source Git Commit:    $REPOCOMMIT"
     fi
-    echo "Binary Archive Name:	$(shed_binary_archive_name)"
+    if [ -n "$SHED_PKG_INSTALLED_VERSION_TRIPLET" ]; then
+        echo "Installed Version:	$SHED_PKG_INSTALLED_VERSION_TRIPLET"
+    else
+        echo "Installed Version:	Not Installed"
+    fi
     if [ -n "$LICENSE" ]; then
         echo "License(s):		${LICENSE[*]}"
     fi
@@ -545,10 +556,14 @@ shed_package_info () {
     if [ -n "$RUN_DEPS" ]; then
         echo "Runtime Dependencies:	${RUN_DEPS[*]}"
     fi
-    if [ -n "$SHED_PKG_INSTALLED_VERSION_TRIPLET" ]; then
-        echo "Installed Version:	$SHED_PKG_INSTALLED_VERSION_TRIPLET"
-    else
-        echo "Installed Version:	Not Installed"
+    if [ -n "$SUPPORTED_PACKAGE_OPTIONS" ]; then
+        echo "Supported Package Options:	${SUPPORTED_PACKAGE_OPTIONS[*]}"
+    fi
+    if [ -n "$DEFAULT_PACKAGE_OPTIONS" ]; then
+        echo "Default Package Options:	${DEFAULT_PACKAGE_OPTIONS[*]}"
+    fi
+    if [ -n "$ALIASED_PACKAGE_OPTIONS" ]; then
+        echo "Aliased Package Options:	${ALIASED_PACKAGE_OPTIONS[*]}"
     fi
     if $VERBOSE; then
         if [ -d "$SHED_PKG_PATCH_DIR" ]; then
@@ -813,7 +828,7 @@ shed_add () {
     fi
     echo -n "Shedmake will add the package at $REPOURL to the local repository at ${SHED_LOCAL_REPO_DIR}/${1}..."
     if $VERBOSE; then echo; fi
-    git submodule add -b "$REPO_BRANCH" "$REPOURL" 1>&3 2>&4 && \
+    git submodule add -b "$REPO_BRANCH" "$REPOURL" 1>&3 2>&4 &&
     git submodule init 1>&3 2>&4 || return 1
     if ! $VERBOSE; then echo 'done'; fi
 }
@@ -827,14 +842,14 @@ shed_add_repo () {
     if [ -z "$REPONAME" ]; then
         REPONAME="$(basename $REPOFILE .git)"
     fi
-    shed_can_add_repo "$REPONAME" && \
+    shed_can_add_repo "$REPONAME" &&
     cd "$SHED_REMOTE_REPO_DIR" || return 1
     echo -n "Shedmake will add the repository at $REPOURL to the remote repositories in $SHED_REMOTE_REPO_DIR as $REPONAME..."
     if $VERBOSE; then echo; fi
-    git clone "$REPOURL" "$REPONAME" 1>&3 2>&4 && \
-    cd "$REPONAME" && \
-    git checkout "$REPO_BRANCH" 1>&3 2>&4 && \
-    git submodule init 1>&3 2>&4 && \
+    git clone "$REPOURL" "$REPONAME" 1>&3 2>&4 &&
+    cd "$REPONAME" &&
+    git checkout "$REPO_BRANCH" 1>&3 2>&4 &&
+    git submodule init 1>&3 2>&4 &&
     git submodule update 1>&3 2>&4 || return 1
     if ! $VERBOSE; then echo 'done'; fi
 }
@@ -909,19 +924,34 @@ shed_fetch_source () {
                 else
                     echo -n "Fetching source repository for '$SHED_PKG_NAME'..."
                     if $VERBOSE; then echo; fi
-                    mkdir -p "${1}/${SHED_PKG_NAME}-git"
-                    cd "${1}/${SHED_PKG_NAME}-git"
-                    git init 1>&3 2>&4 && \
-                    git remote add origin "$SRC" 1>&3 2>&4 || return 1
+                    if [ -n "$SRC_REPO_REFSPEC" ]; then
+                        mkdir -p "${1}/${SHED_PKG_NAME}-git" &&
+                        cd "${1}/${SHED_PKG_NAME}-git" &&
+                        git init 1>&3 2>&4 && \
+                        git remote add origin "$SRC" 1>&3 2>&4 || return 1
+                    elif [ -n "$REPOCOMMIT" ]; then
+                        cd "${1}" &&
+                        git clone "$SRC" "${SHED_PKG_NAME}-git" 1>&3 2>&4 || return 1
+                    else
+                        return 1
+                    fi
                 fi
             fi
-            cd "${1}/${SHED_PKG_NAME}-git"
-            # Perform a shallow fetch of the desired refspec
-            local LOCALREPOREF="$(sed -e "s/^refs\/heads\//refs\/remotes\/origin\//g" <<< $REPOREF)"
-            git fetch --depth=1 origin +${REPOREF}:${LOCALREPOREF} 1>&3 2>&4 &&
-            git checkout --quiet FETCH_HEAD 1>&3 2>&4 || return 1
+            cd "${1}/${SHED_PKG_NAME}-git" || return 1
+            if [ -n "$SRC_REPO_REFSPEC" ]; then
+                # Perform a shallow fetch of the desired refspec
+                local LOCAL_REFSPEC="$(sed -e "s/^refs\/heads\//refs\/remotes\/origin\//g" <<< $SRC_REPO_REFSPEC)"
+                git fetch --depth=1 origin +${SRC_REPO_REFSPEC}:${LOCAL_REFSPEC} 1>&3 2>&4 &&
+                git checkout --quiet FETCH_HEAD 1>&3 2>&4 || return 1
+                # TODO: Use signature for verification
+            elif [ -n "$REPOCOMMIT" ]; then
+                # Checkout the specific commit
+                git pull 1>&3 2>&4 &&
+                git checkout $REPOCOMMIT 1>&3 2>&4 || return 1
+            else
+                return 1
+            fi
             if ! $VERBOSE; then echo 'done'; fi
-            # TODO: Use signature for verification
         else
             # Source is an archive
             if [ ! -r "${1}/${SRCFILE}" ]; then
@@ -1195,7 +1225,7 @@ shed_install () {
 }
 
 shed_install_defaults () {
-    # Catalogue available default files
+    # Catalog available default files
     local DEFAULT_FILE
     local FILE_MD5SUM
     local DEFAULTS_LOG_FILE="${SHED_PKG_LOG_DIR}/defaults.log"
@@ -1216,7 +1246,6 @@ shed_install_defaults () {
         done
         shopt -u globstar nullglob dotglob
     fi
-    # echo "Available Defaults: $(declare -p DEFAULT_FILES_MAP | sed -e 's/declare -A \w\+=//')"
 
     if [ ${#DEFAULT_FILES_MAP[@]} -gt 0 ]; then
         echo -n "Installing default configuration files..."
@@ -1237,7 +1266,6 @@ shed_install_defaults () {
             RECORDED_DEFAULTS_MAP["${INSTALLED_DEFAULT[0]}"]="${INSTALLED_DEFAULT[1]}"
         done < "$DEFAULTS_LOG_FILE"
     fi
-    # echo "Recorded Defaults: $(declare -p RECORDED_DEFAULTS_MAP | sed -e 's/declare -A \w\+=//')"
 
     # Iterate through available default files
     for DEFAULT_FILE in "${!DEFAULT_FILES_MAP[@]}"; do
@@ -1281,8 +1309,8 @@ shed_update_repo_at_path () {
         fi
         echo -n "Shedmake will update the remote repository at ${1}..."
         if $VERBOSE; then echo; fi
-        git pull 1>&3 2>&4 && \
-        git submodule init 1>&3 2>&4 && \
+        git pull 1>&3 2>&4 &&
+        git submodule init 1>&3 2>&4 &&
         git submodule update 1>&3 2>&4 || return 1
     else
         if [ -d "${1}/.git" ]; then
@@ -1318,7 +1346,7 @@ shed_clean () {
     fi
     echo -n "Cleaning up cached archives for '$SHED_PKG_NAME'..."
     if $VERBOSE; then echo; fi
-    rm -rfv "$SRCCACHEDIR" 1>&3 2>&4 && \
+    rm -rfv "$SRCCACHEDIR" 1>&3 2>&4 &&
     rm -rfv "$BINCACHEDIR" 1>&3 2>&4 || return 1
     if ! $VERBOSE; then echo 'done'; fi
 }
@@ -1330,7 +1358,7 @@ shed_clean_repo_at_path () {
         if [ ! -d "$PACKAGE" ]; then
             continue
         fi
-        shed_read_package_meta "$PACKAGE" && \
+        shed_read_package_meta "$PACKAGE" &&
         shed_clean || return 1
     done
 }
@@ -1459,10 +1487,10 @@ shed_create () {
     local NEWPKGNAME=$(basename "$1")
     echo -n "Shedmake is creating a new package directory for '$NEWPKGNAME'..."
     if $VERBOSE; then echo; fi
-    mkdir -v "$1" 1>&3 2>&4 && \
+    mkdir -v "$1" 1>&3 2>&4 &&
     cd "$1" || return 1
     if [ -n "$REPOURL" ]; then
-        git init 1>&3 2>&4 && \
+        git init 1>&3 2>&4 &&
         git remote add origin "$REPOURL" 1>&3 2>&4 || return 1
     fi
     local TEMPLATEFILE
@@ -1486,9 +1514,9 @@ shed_create_repo () {
     if $VERBOSE; then echo; fi
     mkdir -v "${SHED_LOCAL_REPO_DIR}/$1" 1>&3 2>&4 || return 1
     if [ -n "$REPOURL" ]; then
-        cd "${SHED_LOCAL_REPO_DIR}/$1" && \
-        git init 1>&3 2>&4 && \
-        git remote add origin "$REPOURL" 1>&3 2>&4
+        cd "${SHED_LOCAL_REPO_DIR}/$1" &&
+        git init 1>&3 2>&4 &&
+        git remote add origin "$REPOURL" 1>&3 2>&4 || return 1
     fi
     if ! $VERBOSE; then echo 'done'; fi
 }
@@ -1496,12 +1524,12 @@ shed_create_repo () {
 shed_push () {
     echo -n "Shedmake will push '$1' ($2) to '$REPO_BRANCH'..."
     if $VERBOSE; then echo; fi
-    push -u origin master && \
-    { git checkout "$REPO_BRANCH" || git checkout -b "$REPO_BRANCH"; } && \
-    git merge master && \
-    git push -u origin "$REPO_BRANCH" && \
-    git tag "$2" && \
-    git push -u origin --tags
+    git push -u origin master 1>&3 2>&4 &&
+    { git checkout "$REPO_BRANCH" 1>&3 2>&4 || git checkout -b "$REPO_BRANCH" 1>&3 2>&4; } &&
+    git merge master 1>&3 2>&4 &&
+    git push -u origin "$REPO_BRANCH" 1>&3 2>&4 &&
+    git tag "$2" 1>&3 2>&4 &&
+    git push -u origin --tags 1>&3 2>&4 || return 1
     if ! $VERBOSE; then echo 'done'; fi
 }
 
