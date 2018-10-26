@@ -1670,8 +1670,7 @@ shed_command () {
             local DEP_CMD_ACTION
             shed_read_package_meta "$1" &&
             shift &&
-            shed_parse_args "$@" &&
-            shed_configure_options || return $?
+            shed_parse_args "$@" || return $?
             shed_package_status &>/dev/null
             PKGSTATUS=$?
             case "$SHEDCMD" in
@@ -1706,7 +1705,8 @@ shed_command () {
                     fi
                     ;;
             esac
-            echo "Shedmake is preparing to $DEP_CMD_ACTION '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET) on ${SHED_INSTALL_ROOT}..."
+            shed_configure_options &&
+            echo "Shedmake is preparing to $DEP_CMD_ACTION '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET) on ${SHED_INSTALL_ROOT}..." &&
             shed_resolve_dependencies INSTALL_DEPS "$DEP_CMD_ACTION" "$DEP_CMD_ACTION" 'true' &&
             shed_install &&
             shed_resolve_dependencies DEFERRED_DEPS 'deferred' "$DEP_CMD_ACTION" 'false' || return $?
