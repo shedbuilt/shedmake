@@ -731,7 +731,7 @@ shed_purge () {
         echo "Unable to retrieve install log for current version '$NEWVERSION'"
         return 1
     else
-        PATHSTODELETE="$(comm -13 ${NEWVERSION}.bom ${OLDVERSION}.bom)"
+        PATHSTODELETE="$(LC_ALL=C comm -13 ${NEWVERSION}.bom ${OLDVERSION}.bom)"
         echo -n "Shedmake will purge files orphaned when '$SHED_PKG_NAME' was upgraded from $OLDVERSION to $NEWVERSION..."
     fi
     if $VERBOSE; then echo; fi
