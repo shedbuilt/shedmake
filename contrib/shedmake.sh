@@ -1712,7 +1712,11 @@ shed_command () {
             shed_resolve_dependencies DEFERRED_DEPS 'deferred' "$DEP_CMD_ACTION" 'false' || return $?
             if [ ${#DEFERRED_DEPS[@]} -gt 0 ]; then
                 echo "Shedmake will re-install '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET) for deferred dependencies..."
-                shed_clean &&
+                # Delete artifacts of previous build
+                if [ -e "${BINCACHEDIR}/$(shed_binary_archive_name)" ]; then
+                    rm -v "${BINCACHEDIR}/$(shed_binary_archive_name)"
+                fi
+                shed_cleanup &&
                 shed_install || return $?
             fi
             shed_resolve_dependencies RUN_DEPS 'runtime' "$DEP_CMD_ACTION" 'false'
