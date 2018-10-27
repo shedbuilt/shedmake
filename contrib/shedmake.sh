@@ -946,7 +946,7 @@ shed_fetch_source () {
                 # TODO: Use signature for verification
             elif [ -n "$REPOCOMMIT" ]; then
                 # Checkout the specific commit
-                git pull 1>&3 2>&4 &&
+                git fetch 1>&3 2>&4 &&
                 git checkout $REPOCOMMIT 1>&3 2>&4 || return 1
             else
                 return 1
