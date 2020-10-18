@@ -29,7 +29,7 @@ done
 if [ -n "${SHED_PKG_LOCAL_OPTIONS[toolchain]}" ]; then
     SHED_PKG_LOCAL_INSTALLED_CONFIG="${SHED_FAKE_ROOT}/tools/etc/shedmake.conf"
     SHED_PKG_LOCAL_CONFIG_OPTIONS="${SHED_PKG_LOCAL_DEVICE} bootstrap !docs"
-    SHED_PKG_LOCAL_IMPLICIT_BUILDDEPS=''
+    SHED_PKG_LOCAL_IMPLICIT_DEPS=''
     install -v -Dm755 "${SHED_PKG_CONTRIB_DIR}/shedmake.sh" "${SHED_FAKE_ROOT}/tools/bin/shedmake" &&
     sed -i "s/#!\/bin\/bash/#!\/tools\/bin\/bash/g" "${SHED_FAKE_ROOT}/tools/bin/shedmake" &&
     sed -i "s/CFGFILE=.*/CFGFILE=\/tools\/etc\/shedmake.conf/g" "${SHED_FAKE_ROOT}/tools/bin/shedmake" &&
@@ -37,7 +37,7 @@ if [ -n "${SHED_PKG_LOCAL_OPTIONS[toolchain]}" ]; then
 else
     SHED_PKG_LOCAL_INSTALLED_CONFIG="${SHED_FAKE_ROOT}${SHED_PKG_DEFAULTS_INSTALL_DIR}/etc/shedmake.conf"
     SHED_PKG_LOCAL_CONFIG_OPTIONS="${SHED_PKG_LOCAL_DEVICE} ${SHED_PKG_LOCAL_BUILDMODE} docs"
-    SHED_PKG_LOCAL_IMPLICIT_BUILDDEPS='binutils gcc m4 ncurses bash bison bzip2 coreutils diffutils file findutils gawk gettext grep gzip make patch perl sed tar texinfo util-linux xz autoconf automake'
+    SHED_PKG_LOCAL_IMPLICIT_DEPS='binutils gcc m4 ncurses bash bison bzip2 coreutils diffutils file findutils gawk gettext grep gzip make patch perl sed tar texinfo util-linux xz autoconf automake'
     install -v -Dm755 "${SHED_PKG_CONTRIB_DIR}/shedmake.sh" "${SHED_FAKE_ROOT}/usr/bin/shedmake" &&
     install -v -Dm644 "${SHED_PKG_CONTRIB_DIR}/template/.gitignore" "${SHED_FAKE_ROOT}${SHED_PKG_DEFAULTS_INSTALL_DIR}/var/shedmake/template/.gitignore" &&
     install -v -m644 "${SHED_PKG_CONTRIB_DIR}/template/package.txt" "${SHED_FAKE_ROOT}${SHED_PKG_DEFAULTS_INSTALL_DIR}/var/shedmake/template/package.txt" &&
@@ -51,4 +51,4 @@ sed -i "s/CPU_CORE=.*/CPU_CORE=${SHED_PKG_LOCAL_CPU_CORE}/" "$SHED_PKG_LOCAL_INS
 sed -i "s/CPU_FEATURES=.*/CPU_FEATURES=${SHED_PKG_LOCAL_CPU_FEATURES}/" "$SHED_PKG_LOCAL_INSTALLED_CONFIG" &&
 sed -i "s/NATIVE_TARGET=.*/NATIVE_TARGET=${SHED_PKG_LOCAL_NATIVE_TARGET}/" "$SHED_PKG_LOCAL_INSTALLED_CONFIG" &&
 sed -i "s/OPTIONS=.*/OPTIONS=${SHED_PKG_LOCAL_CONFIG_OPTIONS}/" "$SHED_PKG_LOCAL_INSTALLED_CONFIG"
-sed -i "s/IMPLICIT_BUILDDEPS=.*/IMPLICIT_BUILDDEPS=${SHED_PKG_LOCAL_IMPLICIT_BUILDDEPS}/" "$SHED_PKG_LOCAL_INSTALLED_CONFIG"
+sed -i "s/IMPLICIT_DEPS=.*/IMPLICIT_DEPS=${SHED_PKG_LOCAL_IMPLICIT_DEPS}/" "$SHED_PKG_LOCAL_INSTALLED_CONFIG"

@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=1.0.0
+SHEDMAKEVER=1.0.1
 CFGFILE=/etc/shedmake.conf
 
 shed_cleanup () {
@@ -92,7 +92,7 @@ shed_load_config () {
     DEFAULT_COMPRESSION="$(sed -n 's/^COMPRESSION=//p' $CFGFILE)"
     DEFAULT_NUMJOBS="$(sed -n 's/^NUM_JOBS=//p' $CFGFILE)"
     read -ra DEFAULT_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' $CFGFILE)
-    read -ra IMPLICIT_BUILD_DEPS <<< $(sed -n 's/^IMPLICIT_BUILDDEPS=//p' "$CFGFILE")
+    read -ra IMPLICIT_DEPS <<< $(sed -n 's/^IMPLICIT_DEPS=//p' "$CFGFILE")
     export SHED_RELEASE="$(sed -n 's/^RELEASE=//p' $CFGFILE)"
     export SHED_CPU_CORE="$(sed -n 's/^CPU_CORE=//p' $CFGFILE)"
     export SHED_CPU_FEATURES="$(sed -n 's/^CPU_FEATURES=//p' $CFGFILE)"
@@ -111,6 +111,7 @@ shed_load_defaults () {
     SHOULD_CLEAN_TEMP=true
     SHOULD_CACHE_SOURCE=false
     SHOULD_CACHE_BINARY=false
+    SHOULD_RESOLVE_IMPLICIT_DEPS=false
     SHOULD_IGNORE_DEPS=false
     SHOULD_INSTALL_DEPS=false
     SHOULD_PREINSTALL=true
@@ -120,6 +121,7 @@ shed_load_defaults () {
     SHOULD_PURGE=false
     SHOULD_STRIP=true
     SHOULD_REQUIRE_ROOT=false
+    SHOULD_LOCATE_AT_PATH=false
     DEFERRED_DEPS=( )
     REQUESTED_OPTIONS=( "${DEFAULT_OPTIONS[@]}" )
     unset PACKAGE_OPTIONS_MAP
@@ -143,7 +145,7 @@ shed_binary_archive_name () {
 
 shed_locate_package () {
     local PKGDIR
-    if [ -d "$1" ]; then
+    if $SHOULD_LOCATE_AT_PATH && [ -d "$1" ]; then
         PKGDIR=$(readlink -f -n "$1")
     else
         local REPO
@@ -218,16 +220,13 @@ shed_parse_args () {
                 -B|--binary-dir)
                     BINCACHEDIR="$OPTVAL"
                     ;;
-                -d|--dependency-of)
-                    DEPENDENCY_OF="$OPTVAL"
-                    ;;
                 -h|--host)
                     SHED_BUILD_HOST="$OPTVAL"
                     ;;
                 -o|--options)
                     REQUESTED_OPTIONS=( $OPTVAL )
                     ;;
-                -p|--purge)
+                -P|--purge-orphaned-files)
                     if ! SHOULD_PURGE=$(shed_parse_yes_no "$OPTVAL"); then
                         echo "Invalid argument for '$OPTION' Please specify 'yes' or 'no'"
                         return 1
@@ -239,7 +238,10 @@ shed_parse_args () {
                 -j|--jobs)
                     SHED_NUM_JOBS="$OPTVAL"
                     ;;
-                -n|--rename)
+                -n|--dependency-of)
+                    DEPENDENCY_OF="$OPTVAL"
+                    ;;
+                -r|--rename)
                     REPONAME="$OPTVAL"
                     ;;
                 -s|--strip)
@@ -273,23 +275,29 @@ shed_parse_args () {
             -C|--cache-binary)
                 SHOULD_CACHE_BINARY=true
                 ;;
-            -D|--skip-defaults-install)
-                SHOULD_INSTALL_DEFAULTS=false
+            -D|--ignore-dependencies)
+                SHOULD_IGNORE_DEPS=true
+                ;;
+            -d|--install-dependencies)
+                SHOULD_INSTALL_DEPS=true
                 ;;
             -f|--force)
                 FORCE_ACTION=true
                 ;;
-            -I|--ignore-dependencies)
-                SHOULD_IGNORE_DEPS=true
+            -i|--resolve-implicit-dependencies)
+                SHOULD_RESOLVE_IMPLICIT_DEPS=true
                 ;;
-            -i|--install-dependencies)
-                SHOULD_INSTALL_DEPS=true
+            -I|--skip-defaults-install)
+                SHOULD_INSTALL_DEFAULTS=false
                 ;;
             -k|--skip-preinstall)
                 SHOULD_PREINSTALL=false
                 ;;
             -K|--skip-postinstall)
                 SHOULD_POSTINSTALL=false
+                ;;
+            -l|--locate-at-path)
+                SHOULD_LOCATE_AT_PATH=true
                 ;;
             -N|--skip-install)
                 SHOULD_INSTALL=false
@@ -589,8 +597,7 @@ shed_package_info () {
 # 30-39 - Package install error
 #    40 - Unmet circular dependency error
 shed_resolve_dependencies () {
-    local -n UNPROCESSED_DEPS=$1
-    declare -a DEPS
+    local -n EXPLICIT_DEPS=$1
     local DEPTYPE=$2
     local INSTALLACTION=$3
     local CANDEFER=$4
@@ -600,6 +607,8 @@ shed_resolve_dependencies () {
     local DEP_RETVAL=0
     local DEP_TO_ADD
     local DEP_COMPONENT
+    declare -a UNPROCESSED_DEPS=( "${IMPLICIT_DEPS[@]}" "${EXPLICIT_DEPS[@]}" )
+    declare -a DEPS
     if ! $SHOULD_IGNORE_DEPS && [ ${#UNPROCESSED_DEPS[@]} -gt 0 ]; then
         for DEP in "${UNPROCESSED_DEPS[@]}"; do
             DEP_TO_ADD=''
@@ -611,7 +620,9 @@ shed_resolve_dependencies () {
                 DEP_TO_ADD=$DEP_COMPONENT
             done
             if [ -n "$DEP_TO_ADD" ]; then
-                DEPS+=( "$DEP_TO_ADD" )
+                if $SHOULD_RESOLVE_IMPLICIT_DEPS || [ -z "${IMPLICIT_DEPS[$DEP_TO_ADD]}" ]; then
+                    DEPS+=( "$DEP_TO_ADD" )
+                fi
             fi
         done
         if $SHOULD_INSTALL_DEPS; then
@@ -1549,6 +1560,7 @@ shed_push_repo () {
 }
 
 shed_command () {
+    declare -a RESOLVEDEPS
     local SHEDCMD
     if [ $# -gt 0 ]; then
         SHEDCMD=$1; shift
@@ -1587,7 +1599,6 @@ shed_command () {
             shed_parse_args "$@" &&
             shed_configure_options &&
             echo "Shedmake is preparing to build '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET)..." &&
-            shed_resolve_dependencies IMPLICIT_BUILD_DEPS 'implicit build' 'install' 'false' &&
             shed_resolve_dependencies BUILD_DEPS 'build' 'install' 'false' &&
             shed_build
             ;;
