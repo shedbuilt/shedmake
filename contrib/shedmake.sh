@@ -97,6 +97,14 @@ shed_load_config () {
     export SHED_CPU_CORE="$(sed -n 's/^CPU_CORE=//p' $CFGFILE)"
     export SHED_CPU_FEATURES="$(sed -n 's/^CPU_FEATURES=//p' $CFGFILE)"
     export SHED_NATIVE_TARGET="$(sed -n 's/^NATIVE_TARGET=//p' $CFGFILE)"
+
+    # Populate implicit dependencies map
+    unset IMPLICIT_DEPS_MAP
+    declare -gA IMPLICIT_DEPS_MAP
+    local DEP
+    for DEP in "${IMPLICIT_DEPS[@]}"; do
+        IMPLICIT_DEPS_MAP["$DEP"]="$DEP"
+    done
 }
 
 shed_load_defaults () {
@@ -607,8 +615,9 @@ shed_resolve_dependencies () {
     local DEP_RETVAL=0
     local DEP_TO_ADD
     local DEP_COMPONENT
-    declare -a UNPROCESSED_DEPS=( "${IMPLICIT_DEPS[@]}" "${EXPLICIT_DEPS[@]}" )
+    declare -a UNPROCESSED_DEPS
     declare -a DEPS
+    UNPROCESSED_DEPS=( "${IMPLICIT_DEPS[@]}" "${EXPLICIT_DEPS[@]}" )
     if ! $SHOULD_IGNORE_DEPS && [ ${#UNPROCESSED_DEPS[@]} -gt 0 ]; then
         for DEP in "${UNPROCESSED_DEPS[@]}"; do
             DEP_TO_ADD=''
@@ -620,7 +629,7 @@ shed_resolve_dependencies () {
                 DEP_TO_ADD=$DEP_COMPONENT
             done
             if [ -n "$DEP_TO_ADD" ]; then
-                if $SHOULD_RESOLVE_IMPLICIT_DEPS || [ -z "${IMPLICIT_DEPS[$DEP_TO_ADD]}" ]; then
+                if $SHOULD_RESOLVE_IMPLICIT_DEPS || [ -z "${IMPLICIT_DEPS_MAP[$DEP_TO_ADD]}" ]; then
                     DEPS+=( "$DEP_TO_ADD" )
                 fi
             fi
