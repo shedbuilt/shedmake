@@ -252,12 +252,6 @@ shed_parse_args () {
                 -r|--rename)
                     REPONAME="$OPTVAL"
                     ;;
-                -s|--strip)
-                    if ! SHOULD_STRIP=$(shed_parse_yes_no "$OPTVAL"); then
-                        echo "Invalid argument for '$OPTION' Please specify 'yes' or 'no'"
-                        return 1
-                    fi
-                    ;;
                 -S|--source-dir)
                     SRCCACHEDIR="$OPTVAL"
                     ;;
@@ -312,6 +306,9 @@ shed_parse_args () {
                 ;;
             -R|--retain-temp)
                 SHOULD_CLEAN_TEMP=false
+                ;;
+            -s|--no-strip)
+                SHOULD_STRIP=false
                 ;;
             -v|--verbose)
                 VERBOSE=true
@@ -1177,7 +1174,7 @@ shed_install () {
                 shed_fetch_binary "$BINCACHEDIR" || return 33
                 if [ ! -r "$BINARCHIVE" ]; then
                     # Or, failing that, build it from scratch
-                    shedmake build "${SHED_PKG_DIR}" "${PARSEDARGS[@]}" --retain-temp
+                    shedmake build "${SHED_PKG_DIR}" "${PARSEDARGS[@]}" --locate-at-path --retain-temp
                     local BUILDRETVAL=$?
                     if [ $BUILDRETVAL -ne 0 ]; then
                         echo "Unable to produce or obtain binary archive: $(shed_binary_archive_name)"
@@ -1571,8 +1568,13 @@ shed_push_repo () {
 shed_command () {
     declare -a RESOLVEDEPS
     local SHEDCMD
+    local SHEDOBJ
+    local SHED
     if [ $# -gt 0 ]; then
         SHEDCMD=$1; shift
+        if [ $# -gt 0 ]; then
+            SHEDOBJ=$1; shift
+        fi
         shed_load_defaults
     else
         SHEDCMD=version
@@ -1580,117 +1582,110 @@ shed_command () {
 
     case "$SHEDCMD" in
         add|add-list)
-            if [ $# -lt 2 ]; then
+            if [ $# -lt 1 ]; then
                 shed_print_args_error "$SHEDCMD" '<package_url> <local_repo> [--rename <local_name>] [--branch <repo_branch>]'
                 return 1
             fi
-            REPOURL="$1"; shift
+            REPOURL=$SHEDOBJ
             local ADDTOREPO="$1"; shift
             shed_parse_args "$@" &&
             shed_add "$ADDTOREPO"
             ;;
         add-repo|add-repo-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<repo_url> [--rename <local_name>] [--branch <repo_branch>]'
                 return 1
             fi
-            REPOURL="$1"; shift
+            REPOURL=$SHEDOBJ
             shed_parse_args "$@" &&
             shed_add_repo
             ;;
         build|build-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_read_package_meta "$1" &&
-            shift &&
             shed_parse_args "$@" &&
+            shed_read_package_meta "$SHEDOBJ" &&
             shed_configure_options &&
             echo "Shedmake is preparing to build '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET)..." &&
             shed_resolve_dependencies BUILD_DEPS 'build' 'install' 'false' &&
             shed_build
             ;;
         clean|clean-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_read_package_meta "$1" &&
-            shift &&
             shed_parse_args "$@" &&
+            shed_read_package_meta "$SHEDOBJ" &&
+            shed_configure_options &&
             shed_clean
             ;;
         clean-repo|clean-repo-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<repo_name> [<options>]'
                 return 1
             fi
-            local CLEANREPONAME="$1"; shift
             shed_parse_args "$@" &&
-            shed_clean_repo "$CLEANREPONAME"
+            shed_clean_repo "$SHEDOBJ"
             ;;
         clean-all)
             shed_parse_args "$@" &&
             shed_clean_all
             ;;
         create|create-list|create-repo|create-repo-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" "<new_package_name> [--origin <repo_url>]"
                 return 1
             fi
-            local CREATENAME="$1"; shift
             shed_parse_args "$@" || return $?
             case "$SHEDCMD" in
                 create|create-list)
-                    shed_create "$CREATENAME"
+                    shed_create "$SHEDOBJ"
                     ;;
                 create-repo|create-repo-list)
-                    shed_can_add_repo "$CREATENAME" &&
-                    shed_create_repo "$CREATENAME"
+                    shed_can_add_repo "$SHEDOBJ" &&
+                    shed_create_repo "$SHEDOBJ"
                     ;;
             esac
             ;;
         fetch-binary|fetch-binary-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_read_package_meta "$1" &&
-            shift &&
             shed_parse_args "$@" &&
+            shed_read_package_meta "$SHEDOBJ" &&
             shed_fetch_binary "$BINCACHEDIR"
             ;;
         fetch-source|fetch-source-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_read_package_meta "$1" &&
-            shift &&
             shed_parse_args "$@" &&
+            shed_read_package_meta "$SHEDOBJ" &&
             shed_fetch_source "$SRCCACHEDIR"
             ;;
         info|info-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_read_package_meta "$1" &&
-            shift &&
             shed_parse_args "$@" &&
+            shed_read_package_meta "$SHEDOBJ" &&
             shed_package_info
             ;;
         install|install-list|upgrade|upgrade-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
             local PKGSTATUS
             local DEP_CMD_ACTION
-            shed_read_package_meta "$1" &&
-            shift &&
-            shed_parse_args "$@" || return $?
+            shed_parse_args "$@" &&
+            shed_read_package_meta "$SHEDOBJ" || return $?
             shed_package_status &>/dev/null
             PKGSTATUS=$?
             case "$SHEDCMD" in
@@ -1742,13 +1737,12 @@ shed_command () {
             shed_resolve_dependencies RUN_DEPS 'runtime' "$DEP_CMD_ACTION" 'false'
             ;;
         purge|purge-list|uninstall|uninstall-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_read_package_meta "$1" &&
-            shift &&
-            shed_parse_args "$@" || return $?
+            shed_parse_args "$@" &&
+            shed_read_package_meta "$SHEDOBJ" || return $?
             if [ -z "$SHED_PKG_INSTALLED_VERSION_TRIPLET" ]; then
                 echo "Package '$SHED_PKG_NAME' does not appear to be installed"
                 return 11
@@ -1765,69 +1759,65 @@ shed_command () {
             shed_purge "$NEWVERSIONTUPLE" "$OLDVERSIONTUPLE"
             ;;
         push|push-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_read_package_meta "$1" &&
-            shift &&
             shed_parse_args "$@" &&
+            shed_read_package_meta "$SHEDOBJ" &&
             cd "$SHED_PKG_DIR" &&
             shed_push_package "$SHED_PKG_NAME"
             ;;
         push-repo|push-repo-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<repo_name> [<options>]'
                 return 1
             fi
-            local PUSHREPO="$1"; shift
-            local REPOPATH=$(shed_locate_repo "$PUSHREPO")
+            local REPOPATH=$(shed_locate_repo "$SHEDOBJ")
             if [ -z "$REPOPATH" ]; then
-                shed_print_repo_locate_error "$PUSHREPO"
+                shed_print_repo_locate_error "$SHEDOBJ"
                 return 1
             fi
             shed_parse_args "$@" &&
             cd "$REPOPATH" &&
-            shed_push_repo "$PUSHREPO"
+            shed_push_repo "$SHEDOBJ"
             ;;
         repo-status|repo-status-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<repo_name> [<options>]'
                 return 1
             fi
-            local STATUSREPO="$1"; shift
             shed_parse_args "$@" &&
-            shed_repo_status "$STATUSREPO"
+            shed_repo_status "$SHEDOBJ"
             ;;
         status|status-list)
-            if [ $# -ne 1 ]; then
-                shed_print_args_error "$SHEDCMD" '<package_name>'
+            if [ -z "$SHEDOBJ" ]; then
+                shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_read_package_meta "$1" &&
+            shed_parse_args "$@" &&
+            shed_read_package_meta "$SHEDOBJ" &&
             shed_package_status
             ;;
         update-repo|update-repo-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<repo_name> [<options>]'
                 return 1
             fi
-            local UPDATEREPO="$1"; shift
             shed_parse_args "$@" &&
-            shed_update_repo "$UPDATEREPO"
+            shed_update_repo "$SHEDOBJ"
             ;;
         update-all)
             shed_parse_args "$@" &&
             shed_update_all
             ;;
         upgrade-repo|upgrade-repo-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<repo_name> [<options>]'
                 return 1
             fi
-            local UPGRADEREPO="$1"; shift
             shed_parse_args "$@" &&
-            shed_upgrade_repo "$UPGRADEREPO"
+            shed_upgrade_repo "$SHEDOBJ"
             ;;
         upgrade-all)
             shed_parse_args "$@" &&
