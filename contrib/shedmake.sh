@@ -620,7 +620,10 @@ shed_resolve_dependencies () {
     local DEP_COMPONENT
     declare -a UNPROCESSED_DEPS
     declare -a DEPS
-    UNPROCESSED_DEPS=( "${IMPLICIT_DEPS[@]}" "${EXPLICIT_DEPS[@]}" )
+    if $SHOULD_RESOLVE_IMPLICIT_DEPS; then
+        UNPROCESSED_DEPS+=( "${IMPLICIT_DEPS[@]}" )
+    fi
+    UNPROCESSED_DEPS+=( "${EXPLICIT_DEPS[@]}" )
     if ! $SHOULD_IGNORE_DEPS && [ ${#UNPROCESSED_DEPS[@]} -gt 0 ]; then
         for DEP in "${UNPROCESSED_DEPS[@]}"; do
             DEP_TO_ADD=''
@@ -640,7 +643,9 @@ shed_resolve_dependencies () {
         if $SHOULD_INSTALL_DEPS; then
             DEPACTION="$INSTALLACTION"
         fi
-        echo "Resolving $DEPTYPE dependencies for '$SHED_PKG_NAME'..."
+        if [ ${#DEPS[@]} -gt 0 ]; then
+            echo "Resolving $DEPTYPE dependencies for '$SHED_PKG_NAME'..."
+        fi
         for DEP in "${DEPS[@]}"; do
             local ISHARDDEP=true
             if [ ${#DEP} -gt 2 ] && [ "${DEP:0:1}" == '(' ] && [ "${DEP: -1}" == ')' ]; then
