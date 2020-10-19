@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=1.0.0
+SHEDMAKEVER=1.0.1
 CFGFILE=/etc/shedmake.conf
 
 shed_cleanup () {
@@ -92,11 +92,19 @@ shed_load_config () {
     DEFAULT_COMPRESSION="$(sed -n 's/^COMPRESSION=//p' $CFGFILE)"
     DEFAULT_NUMJOBS="$(sed -n 's/^NUM_JOBS=//p' $CFGFILE)"
     read -ra DEFAULT_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' $CFGFILE)
-    read -ra IMPLICIT_BUILD_DEPS <<< $(sed -n 's/^IMPLICIT_BUILDDEPS=//p' "$CFGFILE")
+    read -ra IMPLICIT_DEPS <<< $(sed -n 's/^IMPLICIT_DEPS=//p' "$CFGFILE")
     export SHED_RELEASE="$(sed -n 's/^RELEASE=//p' $CFGFILE)"
     export SHED_CPU_CORE="$(sed -n 's/^CPU_CORE=//p' $CFGFILE)"
     export SHED_CPU_FEATURES="$(sed -n 's/^CPU_FEATURES=//p' $CFGFILE)"
     export SHED_NATIVE_TARGET="$(sed -n 's/^NATIVE_TARGET=//p' $CFGFILE)"
+
+    # Populate implicit dependencies map
+    unset IMPLICIT_DEPS_MAP
+    declare -gA IMPLICIT_DEPS_MAP
+    local DEP
+    for DEP in "${IMPLICIT_DEPS[@]}"; do
+        IMPLICIT_DEPS_MAP["$DEP"]="$DEP"
+    done
 }
 
 shed_load_defaults () {
@@ -106,11 +114,14 @@ shed_load_defaults () {
     if [ -z "$SHED_REMOTE_REPO_DIR" ]; then
         export SHED_REMOTE_REPO_DIR="$DEFAULT_REMOTE_REPO_DIR"
     fi
+    SRC_CACHE_DIR=''
+    BIN_CACHE_DIR=''
     VERBOSE=false
     FORCE_ACTION=false
     SHOULD_CLEAN_TEMP=true
     SHOULD_CACHE_SOURCE=false
     SHOULD_CACHE_BINARY=false
+    SHOULD_RESOLVE_IMPLICIT_DEPS=false
     SHOULD_IGNORE_DEPS=false
     SHOULD_INSTALL_DEPS=false
     SHOULD_PREINSTALL=true
@@ -120,6 +131,7 @@ shed_load_defaults () {
     SHOULD_PURGE=false
     SHOULD_STRIP=true
     SHOULD_REQUIRE_ROOT=false
+    SHOULD_LOCATE_AT_PATH=false
     DEFERRED_DEPS=( )
     REQUESTED_OPTIONS=( "${DEFAULT_OPTIONS[@]}" )
     unset PACKAGE_OPTIONS_MAP
@@ -143,7 +155,7 @@ shed_binary_archive_name () {
 
 shed_locate_package () {
     local PKGDIR
-    if [ -d "$1" ]; then
+    if $SHOULD_LOCATE_AT_PATH && [ -d "$1" ]; then
         PKGDIR=$(readlink -f -n "$1")
     else
         local REPO
@@ -216,10 +228,7 @@ shed_parse_args () {
                     REPO_BRANCH="$OPTVAL"
                     ;;
                 -B|--binary-dir)
-                    BINCACHEDIR="$OPTVAL"
-                    ;;
-                -d|--dependency-of)
-                    DEPENDENCY_OF="$OPTVAL"
+                    BIN_CACHE_DIR="$OPTVAL"
                     ;;
                 -h|--host)
                     SHED_BUILD_HOST="$OPTVAL"
@@ -227,7 +236,7 @@ shed_parse_args () {
                 -o|--options)
                     REQUESTED_OPTIONS=( $OPTVAL )
                     ;;
-                -p|--purge)
+                -P|--purge-orphaned-files)
                     if ! SHOULD_PURGE=$(shed_parse_yes_no "$OPTVAL"); then
                         echo "Invalid argument for '$OPTION' Please specify 'yes' or 'no'"
                         return 1
@@ -239,17 +248,14 @@ shed_parse_args () {
                 -j|--jobs)
                     SHED_NUM_JOBS="$OPTVAL"
                     ;;
-                -n|--rename)
+                -n|--dependency-of)
+                    DEPENDENCY_OF="$OPTVAL"
+                    ;;
+                -r|--rename)
                     REPONAME="$OPTVAL"
                     ;;
-                -s|--strip)
-                    if ! SHOULD_STRIP=$(shed_parse_yes_no "$OPTVAL"); then
-                        echo "Invalid argument for '$OPTION' Please specify 'yes' or 'no'"
-                        return 1
-                    fi
-                    ;;
                 -S|--source-dir)
-                    SRCCACHEDIR="$OPTVAL"
+                    SRC_CACHE_DIR="$OPTVAL"
                     ;;
                 -t|--target)
                     SHED_BUILD_TARGET="$OPTVAL"
@@ -273,17 +279,20 @@ shed_parse_args () {
             -C|--cache-binary)
                 SHOULD_CACHE_BINARY=true
                 ;;
-            -D|--skip-defaults-install)
-                SHOULD_INSTALL_DEFAULTS=false
+            -D|--ignore-dependencies)
+                SHOULD_IGNORE_DEPS=true
+                ;;
+            -d|--install-dependencies)
+                SHOULD_INSTALL_DEPS=true
                 ;;
             -f|--force)
                 FORCE_ACTION=true
                 ;;
-            -I|--ignore-dependencies)
-                SHOULD_IGNORE_DEPS=true
+            -i|--resolve-implicit-dependencies)
+                SHOULD_RESOLVE_IMPLICIT_DEPS=true
                 ;;
-            -i|--install-dependencies)
-                SHOULD_INSTALL_DEPS=true
+            -I|--skip-defaults-install)
+                SHOULD_INSTALL_DEFAULTS=false
                 ;;
             -k|--skip-preinstall)
                 SHOULD_PREINSTALL=false
@@ -291,11 +300,17 @@ shed_parse_args () {
             -K|--skip-postinstall)
                 SHOULD_POSTINSTALL=false
                 ;;
+            -l|--locate-at-path)
+                SHOULD_LOCATE_AT_PATH=true
+                ;;
             -N|--skip-install)
                 SHOULD_INSTALL=false
                 ;;
             -R|--retain-temp)
                 SHOULD_CLEAN_TEMP=false
+                ;;
+            -s|--no-strip)
+                SHOULD_STRIP=false
                 ;;
             -v|--verbose)
                 VERBOSE=true
@@ -452,55 +467,59 @@ shed_read_package_meta () {
         SHOULD_REQUIRE_ROOT=true
     fi
 
-    SRCCACHEDIR="${SHED_PKG_DIR}/source"
-    BINCACHEDIR="${SHED_PKG_DIR}/binary"
-    PKGMETAFILE="${SHED_PKG_DIR}/package.txt"
+    if [ -z "$SRC_CACHE_DIR" ]; then
+        SRC_CACHE_DIR="${SHED_PKG_DIR}/source"
+    fi
+    if [ -z "$BIN_CACHE_DIR" ]; then
+        BIN_CACHE_DIR="${SHED_PKG_DIR}/binary"
+    fi
+    SHED_PKG_META_FILE="${SHED_PKG_DIR}/package.txt"
     export SHED_PKG_PATCH_DIR="${SHED_PKG_DIR}/patch"
     export SHED_PKG_CONTRIB_DIR="${SHED_PKG_DIR}/contrib"
     export SHED_PKG_LOG_DIR="${SHED_PKG_DIR}/install"
 
-    if [ ! -r "$PKGMETAFILE" ]; then
+    if [ ! -r "$SHED_PKG_META_FILE" ]; then
         echo "Cannot read from package.txt in package directory $SHED_PKG_DIR"
         return 1
     fi
 
     # Package Metadata
-    export SHED_PKG_NAME=$(sed -n 's/^NAME=//p' "$PKGMETAFILE")
-    export SHED_PKG_VERSION=$(sed -n 's/^VERSION=//p' "$PKGMETAFILE")
-    export SHED_PKG_REVISION=$(sed -n 's/^REVISION=//p' "$PKGMETAFILE")
+    export SHED_PKG_NAME=$(sed -n 's/^NAME=//p' "$SHED_PKG_META_FILE")
+    export SHED_PKG_VERSION=$(sed -n 's/^VERSION=//p' "$SHED_PKG_META_FILE")
+    export SHED_PKG_REVISION=$(sed -n 's/^REVISION=//p' "$SHED_PKG_META_FILE")
     export SHED_PKG_VERSION_TUPLE="${SHED_PKG_VERSION}-${SHED_PKG_REVISION}"
     WORKDIR="${TMPDIR%/}/${SHED_PKG_NAME}"
     export SHED_FAKE_ROOT="${WORKDIR}/fakeroot"
-    SRC=$(sed -n 's/^SRC=//p' "$PKGMETAFILE")
-    SRCFILE=$(sed -n 's/^SRCFILE=//p' "$PKGMETAFILE")
+    SRC=$(sed -n 's/^SRC=//p' "$SHED_PKG_META_FILE")
+    SRCFILE=$(sed -n 's/^SRCFILE=//p' "$SHED_PKG_META_FILE")
     if [ -z "$SRCFILE" ] && [ -n "$SRC" ]; then
         SRCFILE=$(basename $SRC)
     fi
-    SRC_REPO_REFSPEC=$(sed -n 's/^REF=//p' "$PKGMETAFILE")
-    REPOCOMMIT=$(sed -n 's/^COMMIT=//p' "$PKGMETAFILE")
-    SRCMD5=$(sed -n 's/^SRCMD5=//p' "$PKGMETAFILE")
-    if [ "$(sed -n 's/^STRIP=//p' $PKGMETAFILE)" = 'no' ]; then
+    SRC_REPO_REFSPEC=$(sed -n 's/^REF=//p' "$SHED_PKG_META_FILE")
+    REPOCOMMIT=$(sed -n 's/^COMMIT=//p' "$SHED_PKG_META_FILE")
+    SRCMD5=$(sed -n 's/^SRCMD5=//p' "$SHED_PKG_META_FILE")
+    if [ "$(sed -n 's/^STRIP=//p' $SHED_PKG_META_FILE)" = 'no' ]; then
         SHOULD_STRIP=false
     fi
-    if [ "$(sed -n 's/^PURGE=//p' $PKGMETAFILE)" = 'yes' ]; then
+    if [ "$(sed -n 's/^PURGE=//p' $SHED_PKG_META_FILE)" = 'yes' ]; then
         SHOULD_PURGE=true
     fi
-    BIN=$(sed -n 's/^BIN=//p' "$PKGMETAFILE")
-    BINFILE=$(sed -n 's/^BINFILE=//p' "$PKGMETAFILE")
+    BIN=$(sed -n 's/^BIN=//p' "$SHED_PKG_META_FILE")
+    BINFILE=$(sed -n 's/^BINFILE=//p' "$SHED_PKG_META_FILE")
     if [ -z "$BINFILE" ] && [ -n "$BIN" ]; then
         BINFILE=$(basename $BIN)
     fi
-    read -ra LICENSE <<< $(sed -n 's/^LICENSE=//p' "$PKGMETAFILE")
+    read -ra LICENSE <<< $(sed -n 's/^LICENSE=//p' "$SHED_PKG_META_FILE")
 
     # Parse dependencies
-    read -ra BUILD_DEPS <<< $(sed -n 's/^BUILDDEPS=//p' "$PKGMETAFILE")
-    read -ra INSTALL_DEPS <<< $(sed -n 's/^INSTALLDEPS=//p' "$PKGMETAFILE")
-    read -ra RUN_DEPS <<< $(sed -n 's/^RUNDEPS=//p' "$PKGMETAFILE")
+    read -ra BUILD_DEPS <<< $(sed -n 's/^BUILDDEPS=//p' "$SHED_PKG_META_FILE")
+    read -ra INSTALL_DEPS <<< $(sed -n 's/^INSTALLDEPS=//p' "$SHED_PKG_META_FILE")
+    read -ra RUN_DEPS <<< $(sed -n 's/^RUNDEPS=//p' "$SHED_PKG_META_FILE")
 
     #Parse package options
-    read -ra ALIASED_PACKAGE_OPTIONS <<< $(sed -n 's/^ALIASES=//p' "$PKGMETAFILE")
-    read -ra SUPPORTED_PACKAGE_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' "$PKGMETAFILE")
-    read -ra DEFAULT_PACKAGE_OPTIONS <<< $(sed -n 's/^DEFAULTS=//p' "$PKGMETAFILE")
+    read -ra ALIASED_PACKAGE_OPTIONS <<< $(sed -n 's/^ALIASES=//p' "$SHED_PKG_META_FILE")
+    read -ra SUPPORTED_PACKAGE_OPTIONS <<< $(sed -n 's/^OPTIONS=//p' "$SHED_PKG_META_FILE")
+    read -ra DEFAULT_PACKAGE_OPTIONS <<< $(sed -n 's/^DEFAULTS=//p' "$SHED_PKG_META_FILE")
 
     export SHED_PKG_DOCS_INSTALL_DIR="/usr/share/doc/${SHED_PKG_NAME}-${SHED_PKG_VERSION}"
     export SHED_PKG_DEFAULTS_INSTALL_DIR="/usr/share/defaults/${SHED_PKG_NAME}"
@@ -589,8 +608,7 @@ shed_package_info () {
 # 30-39 - Package install error
 #    40 - Unmet circular dependency error
 shed_resolve_dependencies () {
-    local -n UNPROCESSED_DEPS=$1
-    declare -a DEPS
+    local -n EXPLICIT_DEPS=$1
     local DEPTYPE=$2
     local INSTALLACTION=$3
     local CANDEFER=$4
@@ -600,6 +618,12 @@ shed_resolve_dependencies () {
     local DEP_RETVAL=0
     local DEP_TO_ADD
     local DEP_COMPONENT
+    declare -a UNPROCESSED_DEPS
+    declare -a DEPS
+    if $SHOULD_RESOLVE_IMPLICIT_DEPS; then
+        UNPROCESSED_DEPS+=( "${IMPLICIT_DEPS[@]}" )
+    fi
+    UNPROCESSED_DEPS+=( "${EXPLICIT_DEPS[@]}" )
     if ! $SHOULD_IGNORE_DEPS && [ ${#UNPROCESSED_DEPS[@]} -gt 0 ]; then
         for DEP in "${UNPROCESSED_DEPS[@]}"; do
             DEP_TO_ADD=''
@@ -611,13 +635,17 @@ shed_resolve_dependencies () {
                 DEP_TO_ADD=$DEP_COMPONENT
             done
             if [ -n "$DEP_TO_ADD" ]; then
-                DEPS+=( "$DEP_TO_ADD" )
+                if $SHOULD_RESOLVE_IMPLICIT_DEPS || [ -z "${IMPLICIT_DEPS_MAP[$DEP_TO_ADD]}" ]; then
+                    DEPS+=( "$DEP_TO_ADD" )
+                fi
             fi
         done
         if $SHOULD_INSTALL_DEPS; then
             DEPACTION="$INSTALLACTION"
         fi
-        echo "Resolving $DEPTYPE dependencies for '$SHED_PKG_NAME'..."
+        if [ ${#DEPS[@]} -gt 0 ]; then
+            echo "Resolving $DEPTYPE dependencies for '$SHED_PKG_NAME'..."
+        fi
         for DEP in "${DEPS[@]}"; do
             local ISHARDDEP=true
             if [ ${#DEP} -gt 2 ] && [ "${DEP:0:1}" == '(' ] && [ "${DEP: -1}" == ')' ]; then
@@ -638,10 +666,10 @@ shed_resolve_dependencies () {
                             continue
                         fi
                         case "$PARSEDARG" in
-                            -D|--dependency-of)
+                            -n|--dependency-of)
                                 IGNOREARG=true
                                 ;&
-                            -f|--force|-R|--retain-temp)
+                            -f|--force|-R|--dependency-of)
                                 continue
                                 ;;
                             *)
@@ -917,10 +945,10 @@ shed_fetch_source () {
         if [ "${SRC: -4}" = '.git' ]; then
             # Source is a git repository
             if [ ! -d "${1}/${SHED_PKG_NAME}-git" ]; then
-                if [ -d "${SRCCACHEDIR}/${SHED_PKG_NAME}-git" ]; then
+                if [ -d "${SRC_CACHE_DIR}/${SHED_PKG_NAME}-git" ]; then
                     echo -n "Updating source repository for '$SHED_PKG_NAME'..."
                     if $VERBOSE; then echo; fi
-                    cp -R "${SRCCACHEDIR}/${SHED_PKG_NAME}-git" "$1"
+                    cp -R "${SRC_CACHE_DIR}/${SHED_PKG_NAME}-git" "$1"
                 else
                     echo -n "Fetching source repository for '$SHED_PKG_NAME'..."
                     if $VERBOSE; then echo; fi
@@ -955,7 +983,7 @@ shed_fetch_source () {
         else
             # Source is an archive
             if [ ! -r "${1}/${SRCFILE}" ]; then
-                if [ ! -r "${SRCCACHEDIR}/${SRCFILE}" ]; then
+                if [ ! -r "${SRC_CACHE_DIR}/${SRCFILE}" ]; then
                     echo -n "Fetching source archive for '$SHED_PKG_NAME'..."
                     if $VERBOSE; then echo; fi
                     shed_download_file "$SRC" "$SRCFILE" "$1"
@@ -967,7 +995,7 @@ shed_fetch_source () {
                     fi
                     if ! $VERBOSE; then echo 'done'; fi
                 else
-                    cp "${SRCCACHEDIR}/${SRCFILE}" "$1"
+                    cp "${SRC_CACHE_DIR}/${SRCFILE}" "$1"
                 fi
             fi
             # Verify Source Archive MD5
@@ -998,20 +1026,20 @@ shed_build () {
 
     # Source acquisition and unpacking
     shed_fetch_source "$WORKDIR" || return 21
-    if $SHOULD_CACHE_SOURCE && [ ! -d "$SRCCACHEDIR" ]; then
-        mkdir "$SRCCACHEDIR"
+    if $SHOULD_CACHE_SOURCE && [ ! -d "$SRC_CACHE_DIR" ]; then
+        mkdir "$SRC_CACHE_DIR"
     fi
     cd "$WORKDIR"
     if [ -n "$SRC" ]; then
         if [ "${SRC: -4}" = '.git' ]; then
             # Source is a git repository
             if $SHOULD_CACHE_SOURCE; then
-                cp -R "${SHED_PKG_NAME}-git" "$SRCCACHEDIR"
+                cp -R "${SHED_PKG_NAME}-git" "$SRC_CACHE_DIR"
             fi
         else
             # Source is an archive or other file
             if $SHOULD_CACHE_SOURCE; then
-                cp "$SRCFILE" "$SRCCACHEDIR"
+                cp "$SRCFILE" "$SRC_CACHE_DIR"
             fi
             # Unarchive Source
             tar xf "$SRCFILE"
@@ -1070,11 +1098,11 @@ shed_build () {
 
     # Archive Build Product
     if $SHOULD_CACHE_BINARY; then
-        if [ ! -d "$BINCACHEDIR" ]; then
-            mkdir "$BINCACHEDIR"
+        if [ ! -d "$BIN_CACHE_DIR" ]; then
+            mkdir "$BIN_CACHE_DIR"
         fi
         echo -n "Creating binary archive $(shed_binary_archive_name)..."
-        tar caf "${BINCACHEDIR}/$(shed_binary_archive_name)" -C "$SHED_FAKE_ROOT" . || return 24
+        tar caf "${BIN_CACHE_DIR}/$(shed_binary_archive_name)" -C "$SHED_FAKE_ROOT" . || return 24
         echo 'done'
     fi
 
@@ -1151,13 +1179,13 @@ shed_install () {
             fi
             if ! $VERBOSE; then echo 'done'; fi
         else
-            local BINARCHIVE="${BINCACHEDIR}/$(shed_binary_archive_name)"
+            local BINARCHIVE="${BIN_CACHE_DIR}/$(shed_binary_archive_name)"
             if [ ! -d "$SHED_FAKE_ROOT" ]; then
                 # Attempt to download a binary archive
-                shed_fetch_binary "$BINCACHEDIR" || return 33
+                shed_fetch_binary "$BIN_CACHE_DIR" || return 33
                 if [ ! -r "$BINARCHIVE" ]; then
                     # Or, failing that, build it from scratch
-                    shedmake build "${SHED_PKG_DIR}" "${PARSEDARGS[@]}" --retain-temp
+                    shedmake build "${SHED_PKG_DIR}" "${PARSEDARGS[@]}" --locate-at-path --retain-temp
                     local BUILDRETVAL=$?
                     if [ $BUILDRETVAL -ne 0 ]; then
                         echo "Unable to produce or obtain binary archive: $(shed_binary_archive_name)"
@@ -1346,8 +1374,8 @@ shed_clean () {
     fi
     echo -n "Cleaning up cached archives for '$SHED_PKG_NAME'..."
     if $VERBOSE; then echo; fi
-    rm -rfv "$SRCCACHEDIR" 1>&3 2>&4 &&
-    rm -rfv "$BINCACHEDIR" 1>&3 2>&4 || return 1
+    rm -rfv "$SRC_CACHE_DIR" 1>&3 2>&4 &&
+    rm -rfv "$BIN_CACHE_DIR" 1>&3 2>&4 || return 1
     if ! $VERBOSE; then echo 'done'; fi
 }
 
@@ -1550,8 +1578,13 @@ shed_push_repo () {
 
 shed_command () {
     local SHEDCMD
+    local SHEDOBJ
+    local SHED
     if [ $# -gt 0 ]; then
         SHEDCMD=$1; shift
+        if [ $# -gt 0 ]; then
+            SHEDOBJ=$1; shift
+        fi
         shed_load_defaults
     else
         SHEDCMD=version
@@ -1559,118 +1592,110 @@ shed_command () {
 
     case "$SHEDCMD" in
         add|add-list)
-            if [ $# -lt 2 ]; then
+            if [ $# -lt 1 ]; then
                 shed_print_args_error "$SHEDCMD" '<package_url> <local_repo> [--rename <local_name>] [--branch <repo_branch>]'
                 return 1
             fi
-            REPOURL="$1"; shift
+            REPOURL=$SHEDOBJ
             local ADDTOREPO="$1"; shift
             shed_parse_args "$@" &&
             shed_add "$ADDTOREPO"
             ;;
         add-repo|add-repo-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<repo_url> [--rename <local_name>] [--branch <repo_branch>]'
                 return 1
             fi
-            REPOURL="$1"; shift
+            REPOURL=$SHEDOBJ
             shed_parse_args "$@" &&
             shed_add_repo
             ;;
         build|build-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_read_package_meta "$1" &&
-            shift &&
             shed_parse_args "$@" &&
+            shed_read_package_meta "$SHEDOBJ" &&
             shed_configure_options &&
             echo "Shedmake is preparing to build '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET)..." &&
-            shed_resolve_dependencies IMPLICIT_BUILD_DEPS 'implicit build' 'install' 'false' &&
             shed_resolve_dependencies BUILD_DEPS 'build' 'install' 'false' &&
             shed_build
             ;;
         clean|clean-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_read_package_meta "$1" &&
-            shift &&
             shed_parse_args "$@" &&
+            shed_read_package_meta "$SHEDOBJ" &&
+            shed_configure_options &&
             shed_clean
             ;;
         clean-repo|clean-repo-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<repo_name> [<options>]'
                 return 1
             fi
-            local CLEANREPONAME="$1"; shift
             shed_parse_args "$@" &&
-            shed_clean_repo "$CLEANREPONAME"
+            shed_clean_repo "$SHEDOBJ"
             ;;
         clean-all)
             shed_parse_args "$@" &&
             shed_clean_all
             ;;
         create|create-list|create-repo|create-repo-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" "<new_package_name> [--origin <repo_url>]"
                 return 1
             fi
-            local CREATENAME="$1"; shift
             shed_parse_args "$@" || return $?
             case "$SHEDCMD" in
                 create|create-list)
-                    shed_create "$CREATENAME"
+                    shed_create "$SHEDOBJ"
                     ;;
                 create-repo|create-repo-list)
-                    shed_can_add_repo "$CREATENAME" &&
-                    shed_create_repo "$CREATENAME"
+                    shed_can_add_repo "$SHEDOBJ" &&
+                    shed_create_repo "$SHEDOBJ"
                     ;;
             esac
             ;;
         fetch-binary|fetch-binary-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_read_package_meta "$1" &&
-            shift &&
             shed_parse_args "$@" &&
-            shed_fetch_binary "$BINCACHEDIR"
+            shed_read_package_meta "$SHEDOBJ" &&
+            shed_fetch_binary "$BIN_CACHE_DIR"
             ;;
         fetch-source|fetch-source-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_read_package_meta "$1" &&
-            shift &&
             shed_parse_args "$@" &&
-            shed_fetch_source "$SRCCACHEDIR"
+            shed_read_package_meta "$SHEDOBJ" &&
+            shed_fetch_source "$SRC_CACHE_DIR"
             ;;
         info|info-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_read_package_meta "$1" &&
-            shift &&
             shed_parse_args "$@" &&
+            shed_read_package_meta "$SHEDOBJ" &&
             shed_package_info
             ;;
         install|install-list|upgrade|upgrade-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
             local PKGSTATUS
             local DEP_CMD_ACTION
-            shed_read_package_meta "$1" &&
-            shift &&
-            shed_parse_args "$@" || return $?
+            shed_parse_args "$@" &&
+            shed_read_package_meta "$SHEDOBJ" || return $?
             shed_package_status &>/dev/null
             PKGSTATUS=$?
             case "$SHEDCMD" in
@@ -1713,8 +1738,8 @@ shed_command () {
             if [ ${#DEFERRED_DEPS[@]} -gt 0 ]; then
                 echo "Shedmake will re-install '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET) for deferred dependencies..."
                 # Delete artifacts of previous build
-                if [ -e "${BINCACHEDIR}/$(shed_binary_archive_name)" ]; then
-                    rm -v "${BINCACHEDIR}/$(shed_binary_archive_name)"
+                if [ -e "${BIN_CACHE_DIR}/$(shed_binary_archive_name)" ]; then
+                    rm -v "${BIN_CACHE_DIR}/$(shed_binary_archive_name)"
                 fi
                 shed_cleanup &&
                 shed_install || return $?
@@ -1722,13 +1747,12 @@ shed_command () {
             shed_resolve_dependencies RUN_DEPS 'runtime' "$DEP_CMD_ACTION" 'false'
             ;;
         purge|purge-list|uninstall|uninstall-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_read_package_meta "$1" &&
-            shift &&
-            shed_parse_args "$@" || return $?
+            shed_parse_args "$@" &&
+            shed_read_package_meta "$SHEDOBJ" || return $?
             if [ -z "$SHED_PKG_INSTALLED_VERSION_TRIPLET" ]; then
                 echo "Package '$SHED_PKG_NAME' does not appear to be installed"
                 return 11
@@ -1745,69 +1769,65 @@ shed_command () {
             shed_purge "$NEWVERSIONTUPLE" "$OLDVERSIONTUPLE"
             ;;
         push|push-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_read_package_meta "$1" &&
-            shift &&
             shed_parse_args "$@" &&
+            shed_read_package_meta "$SHEDOBJ" &&
             cd "$SHED_PKG_DIR" &&
             shed_push_package "$SHED_PKG_NAME"
             ;;
         push-repo|push-repo-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<repo_name> [<options>]'
                 return 1
             fi
-            local PUSHREPO="$1"; shift
-            local REPOPATH=$(shed_locate_repo "$PUSHREPO")
+            local REPOPATH=$(shed_locate_repo "$SHEDOBJ")
             if [ -z "$REPOPATH" ]; then
-                shed_print_repo_locate_error "$PUSHREPO"
+                shed_print_repo_locate_error "$SHEDOBJ"
                 return 1
             fi
             shed_parse_args "$@" &&
             cd "$REPOPATH" &&
-            shed_push_repo "$PUSHREPO"
+            shed_push_repo "$SHEDOBJ"
             ;;
         repo-status|repo-status-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<repo_name> [<options>]'
                 return 1
             fi
-            local STATUSREPO="$1"; shift
             shed_parse_args "$@" &&
-            shed_repo_status "$STATUSREPO"
+            shed_repo_status "$SHEDOBJ"
             ;;
         status|status-list)
-            if [ $# -ne 1 ]; then
-                shed_print_args_error "$SHEDCMD" '<package_name>'
+            if [ -z "$SHEDOBJ" ]; then
+                shed_print_args_error "$SHEDCMD" '<package_name> [<options>]'
                 return 1
             fi
-            shed_read_package_meta "$1" &&
+            shed_parse_args "$@" &&
+            shed_read_package_meta "$SHEDOBJ" &&
             shed_package_status
             ;;
         update-repo|update-repo-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<repo_name> [<options>]'
                 return 1
             fi
-            local UPDATEREPO="$1"; shift
             shed_parse_args "$@" &&
-            shed_update_repo "$UPDATEREPO"
+            shed_update_repo "$SHEDOBJ"
             ;;
         update-all)
             shed_parse_args "$@" &&
             shed_update_all
             ;;
         upgrade-repo|upgrade-repo-list)
-            if [ $# -lt 1 ]; then
+            if [ -z "$SHEDOBJ" ]; then
                 shed_print_args_error "$SHEDCMD" '<repo_name> [<options>]'
                 return 1
             fi
-            local UPGRADEREPO="$1"; shift
             shed_parse_args "$@" &&
-            shed_upgrade_repo "$UPGRADEREPO"
+            shed_upgrade_repo "$SHEDOBJ"
             ;;
         upgrade-all)
             shed_parse_args "$@" &&
