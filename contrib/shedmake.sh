@@ -455,10 +455,9 @@ shed_configure_options () {
     export SHED_PKG_VERSION_TRIPLET="${SHED_PKG_VERSION}-${SHED_PKG_REVISION}-${DELIMITED_SORTED_OPTIONS}"
 }
 
-shed_read_package_meta () {
-    export SHED_PKG_DIR=$(shed_locate_package "$1")
+shed_read_package_meta_at_path () {
+    export SHED_PKG_DIR="$1"
     if [ -z "$SHED_PKG_DIR" ]; then
-        echo "$1 is not a package directory"
         return 1
     fi
 
@@ -540,6 +539,15 @@ shed_read_package_meta () {
             return 1
         fi
     fi
+}
+
+shed_read_package_meta () {
+  local PKG_PATH=$(shed_locate_package "$1")
+  if [ -z "$PKG_PATH" ]; then
+      echo "Unable to locate package: $1"
+      return 1
+  fi
+  shed_read_package_meta_at_path "$PKG_PATH"
 }
 
 shed_package_info () {
@@ -1386,7 +1394,7 @@ shed_clean_repo_at_path () {
         if [ ! -d "$PACKAGE" ]; then
             continue
         fi
-        shed_read_package_meta "$PACKAGE" &&
+        shed_read_package_meta_at_path "$PACKAGE" &&
         shed_clean || return 1
     done
 }
@@ -1444,7 +1452,7 @@ shed_repo_status_at_path () {
         if [ ! -d "$PACKAGE" ]; then
             continue
         fi
-        shed_read_package_meta "$PACKAGE" || return 1
+        shed_read_package_meta_at_path "$PACKAGE" || return 1
         shed_package_status 1>&3 2>&4
         PKGSTATUS=$?
         if [ "$PKGSTATUS" -ne 11 ]; then
@@ -1483,7 +1491,7 @@ shed_upgrade_repo_at_path () {
         if [ ! -d "$PACKAGE" ]; then
             continue
         fi
-        shedmake upgrade "$PACKAGE" "${PARSEDARGS[@]}"
+        shedmake upgrade "$PACKAGE" "${PARSEDARGS[@]}" --locate-at-path
         UPGRRETVAL=$?
         if [ $UPGRRETVAL -ne 0 ] && [ $UPGRRETVAL -ne 11 ]; then
             return $UPGRRETVAL
