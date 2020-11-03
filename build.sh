@@ -10,7 +10,7 @@ for SHED_PKG_LOCAL_OPTION in "${!SHED_PKG_LOCAL_OPTIONS[@]}"; do
         *)
             SHED_PKG_LOCAL_DEVICE="$SHED_PKG_LOCAL_OPTION"
             case "$SHED_PKG_LOCAL_DEVICE" in
-                allh5cc|nanopik1plus|nanopineo2|nanopineoplus2|orangepipc2)
+                allh5cc|nanopik1plus|nanopineo2|nanopineoplus2|orangepipc2|rock64)
                     SHED_PKG_LOCAL_CPU_CORE='cortex-a53'
                     SHED_PKG_LOCAL_CPU_FEATURES='crypto'
                     SHED_PKG_LOCAL_NATIVE_TARGET='aarch64-unknown-linux-gnu'
