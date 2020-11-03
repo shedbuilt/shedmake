@@ -19,7 +19,7 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 # Shedmake Defines
-SHEDMAKEVER=1.0.1
+SHEDMAKEVER=1.0.2
 CFGFILE=/etc/shedmake.conf
 
 shed_cleanup () {
@@ -149,7 +149,11 @@ shed_binary_archive_name () {
     if [ -n "$BINFILE" ]; then
         eval echo "$BINFILE"
     else
-        echo "${SHED_PKG_NAME}_${SHED_PKG_VERSION_TRIPLET}_${SHED_RELEASE}_${SHED_CPU_CORE}_${SHED_CPU_FEATURES}.${SHED_BINARY_ARCHIVE_EXT}"
+        local INTERIM_STATUS=''
+        if [ ${#DEFERRED_DEPS[@]} -gt 0 ]; then
+            INTERIM_STATUS='.interim'
+        fi
+        echo "${SHED_PKG_NAME}_${SHED_PKG_VERSION_TRIPLET}_${SHED_RELEASE}_${SHED_CPU_CORE}_${SHED_CPU_FEATURES}${INTERIM_STATUS}.${SHED_BINARY_ARCHIVE_EXT}"
     fi
 }
 
@@ -1750,10 +1754,8 @@ shed_command () {
             shed_resolve_dependencies DEFERRED_DEPS 'deferred' "$DEP_CMD_ACTION" 'false' || return $?
             if [ ${#DEFERRED_DEPS[@]} -gt 0 ]; then
                 echo "Shedmake will re-install '$SHED_PKG_NAME' ($SHED_PKG_VERSION_TRIPLET) for deferred dependencies..."
+                DEFERRED_DEPS=( )
                 # Delete artifacts of previous build
-                if [ -e "${BIN_CACHE_DIR}/$(shed_binary_archive_name)" ]; then
-                    rm -v "${BIN_CACHE_DIR}/$(shed_binary_archive_name)"
-                fi
                 shed_cleanup &&
                 shed_install || return $?
             fi
